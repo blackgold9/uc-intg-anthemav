@@ -80,6 +80,9 @@ async def _initialize_integration():
                     media_players[media_player_entity.id] = media_player_entity
                     
                     _LOG.info(f"Created media player entity: {media_player_entity.id}")
+                    
+                    await asyncio.sleep(0.2)
+                    await media_player_entity.push_update()
                 
                 connected_devices += 1
                 _LOG.info(f"Successfully setup device: {device_config.name} with {len(device_config.zones)} zones")

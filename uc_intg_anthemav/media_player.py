@@ -48,12 +48,30 @@ class AnthemMediaPlayer(MediaPlayer):
             Features.SELECT_SOURCE
         ]
         
+        source_list = [
+            "HDMI 1",
+            "HDMI 2",
+            "HDMI 3",
+            "HDMI 4",
+            "HDMI 5",
+            "HDMI 6",
+            "HDMI 7",
+            "HDMI 8",
+            "Analog 1",
+            "Analog 2",
+            "Digital 1",
+            "Digital 2",
+            "USB",
+            "Network",
+            "ARC"
+        ]
+        
         attributes = {
             Attributes.STATE: States.UNAVAILABLE,
             Attributes.VOLUME: 0,
             Attributes.MUTED: False,
             Attributes.SOURCE: "",
-            Attributes.SOURCE_LIST: []
+            Attributes.SOURCE_LIST: source_list
         }
         
         super().__init__(
@@ -114,7 +132,7 @@ class AnthemMediaPlayer(MediaPlayer):
     def _db_to_percentage(self, db_value: int) -> float:
         db_range = 90
         percentage = ((db_value + 90) / db_range) * 100
-        return max(0.0, min(100.0, percentage)) / 100.0
+        return max(0.0, min(100.0, percentage))
     
     def _percentage_to_db(self, percentage: float) -> int:
         db_range = 90
@@ -175,7 +193,7 @@ class AnthemMediaPlayer(MediaPlayer):
                 return StatusCodes.BAD_REQUEST
             
             else:
-                _LOG.warning(f"Unknown command: {cmd_id}")
+                _LOG.warning(f"Unsupported command for AVR: {cmd_id}")
                 return StatusCodes.NOT_IMPLEMENTED
         
         except Exception as e:
