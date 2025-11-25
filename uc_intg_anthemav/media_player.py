@@ -48,12 +48,6 @@ class AnthemMediaPlayer(MediaPlayer):
             Features.SELECT_SOURCE
         ]
         
-        simple_commands = [
-            Commands.VOLUME_UP,
-            Commands.VOLUME_DOWN,
-            Commands.MUTE_TOGGLE
-        ]
-        
         source_list = [
             "HDMI 1", "HDMI 2", "HDMI 3", "HDMI 4",
             "HDMI 5", "HDMI 6", "HDMI 7", "HDMI 8",
@@ -77,7 +71,6 @@ class AnthemMediaPlayer(MediaPlayer):
             attributes,
             device_class=DeviceClasses.RECEIVER,
             area=device_config.name if zone_config.zone_number > 1 else None,
-            simple_commands=simple_commands,
             cmd_handler=self.handle_command
         )
         

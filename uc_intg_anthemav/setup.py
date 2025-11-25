@@ -48,8 +48,15 @@ class AnthemSetup:
         try:
             zones = [ZoneConfig(zone_number=i) for i in range(1, zones_count + 1)]
             
+            device_id = f"anthem_{host.replace('.', '_')}_{port}"
+            
+            existing_device = self._config.get_device(device_id)
+            if existing_device:
+                _LOG.info(f"Device {device_id} already exists, removing for reconfiguration")
+                self._config.remove_device(device_id)
+            
             device_config = DeviceConfig(
-                device_id=f"anthem_{host.replace('.', '_')}_{port}",
+                device_id=device_id,
                 name=name,
                 ip_address=host,
                 model=model,
@@ -174,6 +181,12 @@ class AnthemSetup:
                 zones = [ZoneConfig(zone_number=i) for i in range(1, device_data["zones_count"] + 1)]
                 
                 device_id = f"anthem_{device_data['host'].replace('.', '_')}_{device_data['port']}"
+                
+                existing_device = self._config.get_device(device_id)
+                if existing_device:
+                    _LOG.info(f"Device {device_id} already exists, removing for reconfiguration")
+                    self._config.remove_device(device_id)
+                
                 device_config = DeviceConfig(
                     device_id=device_id,
                     name=device_data['name'],
