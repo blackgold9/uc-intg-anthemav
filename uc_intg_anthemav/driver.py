@@ -26,7 +26,7 @@ entities_ready: bool = False
 initialization_lock: asyncio.Lock = asyncio.Lock()
 setup_manager: AnthemSetup | None = None
 
-_LOG = logging.getLogger(__main__)
+_LOG = logging.getLogger(__name__)
 
 
 async def _initialize_integration():
