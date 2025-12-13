@@ -214,8 +214,6 @@ class AnthemMediaPlayer(MediaPlayer):
             return StatusCodes.SERVER_ERROR
     
     async def push_update(self) -> None:
-        await self._client.query_input_count()
-        await asyncio.sleep(0.2)
         await self._client.query_all_status(self._zone_config.zone_number)
     
     @property

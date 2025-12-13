@@ -233,6 +233,10 @@ class AnthemClient:
     async def _process_response(self, response: str) -> None:
         _LOG.info(f"RECEIVED: {response}")
         
+        if response.startswith("!I") or response.startswith("!E"):
+            _LOG.warning(f"Device returned error response: {response}")
+            return
+        
         try:
             self._update_state_from_response(response)
         except Exception as e:
@@ -304,10 +308,11 @@ class AnthemClient:
                     _LOG.debug(f"Zone {zone_num} power: {power}")
                 
                 elif "VOL" in response:
-                    vol_match = re.search(r'VOL(-?\d+)', response)
+                    vol_match = re.search(r'VOL(-?\d+(?:\.\d+)?)', response)
                     if vol_match:
-                        volume = int(vol_match.group(1))
-                        self._state_cache[zone_key]["volume"] = volume
+                        volume_str = vol_match.group(1)
+                        volume = float(volume_str)
+                        self._state_cache[zone_key]["volume"] = int(volume)
                         _LOG.debug(f"Zone {zone_num} volume: {volume}dB")
                 
                 elif "MUT" in response:
@@ -324,20 +329,6 @@ class AnthemClient:
                         
                         if input_num in self._input_names:
                             self._state_cache[zone_key]["input_name"] = self._input_names[input_num]
-                
-                elif "SIP" in response:
-                    inp_match = re.search(r'SIP"([^"]*)"', response)
-                    if inp_match:
-                        input_name = inp_match.group(1)
-                        self._state_cache[zone_key]["input_name"] = input_name
-                        _LOG.debug(f"Zone {zone_num} input name: {input_name}")
-                
-                elif "AIC" in response:
-                    format_match = re.search(r'AIC"([^"]*)"', response)
-                    if format_match:
-                        audio_format = format_match.group(1)
-                        self._state_cache[zone_key]["audio_format"] = audio_format
-                        _LOG.debug(f"Zone {zone_num} audio format: {audio_format}")
     
     async def _discover_input_names(self) -> None:
         if self._input_count == 0:
@@ -347,7 +338,7 @@ class AnthemClient:
         _LOG.info(f"Starting input name discovery for {self._input_count} inputs")
         
         for input_num in range(1, self._input_count + 1):
-            await self._send_command(f"ISN{input_num:02d}")
+            await self._send_command(f"ISN{input_num:02d}?")
             await asyncio.sleep(0.1)
         
         await asyncio.sleep(1.0)
@@ -380,11 +371,7 @@ class AnthemClient:
         return await self._send_command(f"Z{zone}MUT{'1' if muted else '0'}")
     
     async def select_input(self, input_num: int, zone: int = 1) -> bool:
-        success = await self._send_command(f"Z{zone}INP{input_num}")
-        if success:
-            await asyncio.sleep(0.1)
-            await self.query_input_name(zone)
-        return success
+        return await self._send_command(f"Z{zone}INP{input_num}")
     
     async def query_power(self, zone: int = 1) -> bool:
         return await self._send_command(f"Z{zone}POW?")
@@ -398,9 +385,6 @@ class AnthemClient:
     async def query_input(self, zone: int = 1) -> bool:
         return await self._send_command(f"Z{zone}INP?")
     
-    async def query_input_name(self, zone: int = 1) -> bool:
-        return await self._send_command(f"Z{zone}SIP?")
-    
     async def query_model(self) -> bool:
         return await self._send_command("IDM?")
     
@@ -413,7 +397,6 @@ class AnthemClient:
         await asyncio.sleep(0.1)
         await self.query_input(zone)
         await asyncio.sleep(0.1)
-        await self.query_input_name(zone)
         return True
     
     def get_zone_state(self, zone: int) -> Dict[str, Any]:
