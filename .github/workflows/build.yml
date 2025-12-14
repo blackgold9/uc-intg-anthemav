@@ -4,7 +4,7 @@ name: "Build & Draft Release"
 "on":
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 env:
   INTG_NAME: anthemav
@@ -53,7 +53,7 @@ jobs:
             bash -c \
             "cd /workspace && \
               python -m pip install -r requirements.txt && \
-              pyinstaller --clean --onedir --name intg-${{ env.DRIVER_ID }} --collect-all zeroconf --collect-all ucapi_framework uc_intg_anthemav/__main__.py"
+              pyinstaller --clean --onedir --name intg-${{ env.DRIVER_ID }} --collect-all zeroconf --collect-all ucapi_framework uc_intg_anthemav/driver.py"
 
       - name: Prepare artifacts
         shell: bash
@@ -63,13 +63,13 @@ jobs:
           mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
           cp driver.json artifacts/
           echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
-          
+
       - name: Create upload artifact archive
         shell: bash
-        run: | 
+        run: |
           tar czvf ${{ env.ARTIFACT_NAME }}.tar.gz -C ${GITHUB_WORKSPACE}/artifacts .
           ls -lah
-          
+
       - uses: actions/upload-artifact@v4
         id: upload_artifact
         with:
@@ -77,7 +77,7 @@ jobs:
           path: ${{ env.ARTIFACT_NAME }}.tar.gz
           if-no-files-found: error
           retention-days: 3
-            
+
   docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-24.04
@@ -116,7 +116,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-            
+
   release:
     name: Create Release
     runs-on: ubuntu-24.04
