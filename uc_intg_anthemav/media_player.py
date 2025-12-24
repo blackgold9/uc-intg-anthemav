@@ -10,7 +10,6 @@ from typing import Any
 
 from ucapi import StatusCodes
 from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, MediaPlayer, States, Options
-from ucapi_framework import DeviceEvents
 
 from uc_intg_anthemav.config import AnthemDeviceConfig, ZoneConfig
 from uc_intg_anthemav.device import AnthemDevice
@@ -46,14 +45,15 @@ class AnthemMediaPlayer(MediaPlayer):
             Features.SELECT_SOURCE
         ]
         
-        # Initial attributes - SOURCE_LIST MUST start empty!
-        # Will be populated after input discovery, like WiiM
+        # Initial attributes
+        # CRITICAL: SOURCE_LIST must be empty initially!
+        # It gets populated after input discovery via device events
         attributes = {
             Attributes.STATE: States.UNAVAILABLE,
             Attributes.VOLUME: 0,
             Attributes.MUTED: False,
             Attributes.SOURCE: "",
-            Attributes.SOURCE_LIST: []
+            Attributes.SOURCE_LIST: []  # Empty! Gets populated after discovery
         }
         
         # Simple commands
@@ -77,36 +77,7 @@ class AnthemMediaPlayer(MediaPlayer):
             options=options
         )
         
-        device.events.on(DeviceEvents.UPDATE, self._on_device_update)
         _LOG.info("[%s] Entity initialized for Zone %d", self.id, zone_config.zone_number)
-    
-    async def _on_device_update(self, entity_id: str, update_data: dict[str, Any]) -> None:
-        """Handle device state updates."""
-        if entity_id != self.id:
-            return
-        
-        for key, value in update_data.items():
-            if key == "state":
-                if value == "ON":
-                    self.attributes[Attributes.STATE] = States.ON
-                elif value == "OFF":
-                    self.attributes[Attributes.STATE] = States.OFF
-                else:
-                    self.attributes[Attributes.STATE] = States.UNAVAILABLE
-            elif key == "volume":
-                self.attributes[Attributes.VOLUME] = value
-            elif key == "muted":
-                self.attributes[Attributes.MUTED] = value
-            elif key == "source":
-                self.attributes[Attributes.SOURCE] = value
-            elif key == "source_list":
-                self.attributes[Attributes.SOURCE_LIST] = value
-                _LOG.info("[%s] Source list updated: %d sources", self.id, len(value))
-    
-    async def push_update(self) -> None:
-        """Push current state to Remote."""
-        _LOG.info("[%s] Querying status for Zone %d", self.id, self._zone_config.zone_number)
-        await self._device.query_status(self._zone_config.zone_number)
     
     async def handle_command(
         self,
@@ -131,6 +102,7 @@ class AnthemMediaPlayer(MediaPlayer):
             elif cmd_id == Commands.VOLUME:
                 if params and "volume" in params:
                     volume_pct = float(params["volume"])
+                    # Convert percentage to dB (-90 to 0)
                     volume_db = int((volume_pct * 90 / 100) - 90)
                     success = await self._device.set_volume(volume_db, zone)
                     return StatusCodes.OK if success else StatusCodes.SERVER_ERROR

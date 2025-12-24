@@ -1,5 +1,5 @@
 """
-Anthem A/V Receiver configuration with dataclasses.
+Anthem A/V Receiver configuration with discovered capabilities.
 
 :copyright: (c) 2025 by Meir Miyara.
 :license: MPL-2.0, see LICENSE for more details.
@@ -25,14 +25,17 @@ class ZoneConfig:
 
 @dataclass
 class AnthemDeviceConfig:
-    """Configuration for an Anthem A/V receiver."""
-    
     identifier: str
     name: str
     host: str
-    model: str = "MRX"
+    model: str = "AVM"
     port: int = 14999
     zones: list[ZoneConfig] = field(default_factory=lambda: [ZoneConfig(1)])
+    
+    # CRITICAL: Store discovered inputs from setup flow
+    # This is populated during query_device() BEFORE entities are created
+    discovered_inputs: list[str] = field(default_factory=list)
+    discovered_model: str = "Unknown"
 
 
 class AnthemConfigManager(BaseConfigManager[AnthemDeviceConfig]):

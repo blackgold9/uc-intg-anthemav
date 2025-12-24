@@ -18,13 +18,6 @@ _LOG = logging.getLogger(__name__)
 
 
 class AnthemDevice(PersistentConnectionDevice):
-    """
-    Anthem A/V Receiver using TCP protocol with semicolon message termination.
-    
-    Protocol: TCP text-based on port 14999
-    Message termination: Semicolon (;) NOT carriage return
-    """
-    
     def __init__(self, device_config: AnthemDeviceConfig, **kwargs):
         super().__init__(device_config, **kwargs)
         self._device_config = device_config
@@ -94,11 +87,6 @@ class AnthemDevice(PersistentConnectionDevice):
         self._writer = None
     
     async def maintain_connection(self) -> None:
-        """
-        Maintain the connection by reading and processing messages.
-        
-        CRITICAL: Anthem uses SEMICOLON (;) termination, NOT carriage return!
-        """
         buffer = ""
         _LOG.debug("[%s] Message loop started", self.log_id)
         
@@ -317,17 +305,29 @@ class AnthemDevice(PersistentConnectionDevice):
         return True
     
     def get_input_list(self) -> list[str]:
-        """Get list of available input names."""
-        if not self._input_names:
-            # Default list if discovery hasn't completed
+        if self._device_config.discovered_inputs:
+            _LOG.debug("[%s] Using discovered inputs from config (%d sources)",
+                      self.log_id, len(self._device_config.discovered_inputs))
+            return self._device_config.discovered_inputs
+        
+        # PRIORITY 2: Use runtime discovered names
+        if self._input_names and self._input_count > 0:
+            _LOG.debug("[%s] Using runtime discovered inputs (%d sources)",
+                      self.log_id, self._input_count)
             return [
-                "HDMI 1", "HDMI 2", "HDMI 3", "HDMI 4",
-                "HDMI 5", "HDMI 6", "HDMI 7", "HDMI 8",
-                "Analog 1", "Analog 2",
-                "Digital 1", "Digital 2",
-                "USB", "Network", "ARC"
+                self._input_names.get(i, f"Input {i}") 
+                for i in range(1, self._input_count + 1)
             ]
         
+        # PRIORITY 3: Fallback to defaults
+        _LOG.debug("[%s] Using default input list (discovery incomplete)", self.log_id)
+        return [
+            "HDMI 1", "HDMI 2", "HDMI 3", "HDMI 4",
+            "HDMI 5", "HDMI 6", "HDMI 7", "HDMI 8",
+            "Analog 1", "Analog 2",
+            "Digital 1", "Digital 2",
+            "USB", "Network", "ARC"
+        ]
         return [self._input_names.get(i, f"Input {i}") for i in range(1, self._input_count + 1)]
     
     def get_input_number_by_name(self, name: str) -> int | None:

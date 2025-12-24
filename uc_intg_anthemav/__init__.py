@@ -38,10 +38,6 @@ async def main():
         
         # Create driver
         driver = AnthemDriver(loop)
-        
-        # Setup configuration manager
-        # Note: config_dir_path may not be fully set until after init(),
-        # but get_config_path() handles this with environment detection
         config_path = get_config_path(driver.api.config_dir_path or "")
         config_manager = AnthemConfigManager(
             config_path,

@@ -1,5 +1,5 @@
 """
-Anthem Remote Entity - Advanced Audio Processing Controls.
+Anthem Remote Entity - Working version with proper send_cmd handling.
 
 :copyright: (c) 2025 by Meir Miyara.
 :license: MPL-2.0, see LICENSE for more details.
@@ -9,27 +9,15 @@ import logging
 from typing import Any
 
 from ucapi import StatusCodes
-from ucapi.remote import Attributes, Commands, Features, Remote
+from ucapi.remote import Attributes, Commands, Features, Options, Remote
 
-from uc_intg_anthemav.config import AnthemDeviceConfig, ZoneConfig
-from uc_intg_anthemav.device import AnthemDevice
+from .config import AnthemDeviceConfig, ZoneConfig
+from .device import AnthemDevice
 
 _LOG = logging.getLogger(__name__)
 
 
 class AnthemRemote(Remote):
-    """
-    Remote entity for Anthem A/V receiver advanced audio processing.
-    
-    Provides access to advanced features:
-    - Audio Listening Modes (Dolby, DTS, AnthemLogic, etc.)
-    - Tone Controls (Bass/Treble)
-    - Balance Adjustments
-    - Individual Speaker Levels
-    - Audio Processing Settings
-    """
-    
-    # Anthem Audio Listening Modes
     LISTENING_MODES = {
         "None": 0,
         "AnthemLogic Cinema": 1,
@@ -49,21 +37,8 @@ class AnthemRemote(Remote):
         "Direct": 15
     }
     
-    # Speaker channel mappings for level control
-    SPEAKER_CHANNELS = {
-        "Subwoofer": 1,
-        "Front Left/Right": 5,
-        "Front Wide": 6,
-        "Center": 7,
-        "Surround": 8,
-        "Back": 9,
-        "Height 1": 10,
-        "Height 2": 11,
-        "Height 3": 12
-    }
-    
     def __init__(self, device_config: AnthemDeviceConfig, device: AnthemDevice, zone_config: ZoneConfig):
-        """Initialize remote entity."""
+        """Initialize remote entity with UI pages."""
         self._device = device
         self._device_config = device_config
         self._zone_config = zone_config
@@ -76,64 +51,254 @@ class AnthemRemote(Remote):
             entity_id = f"remote.{device_config.identifier}.zone{zone_config.zone_number}"
             entity_name = f"{device_config.name} Zone {zone_config.zone_number} Audio Controls"
         
-        # Define button mappings for Anthem audio processing
-        button_mappings = [
-            # Audio Listening Modes
-            {"button": "DOLBY_SURROUND", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "Dolby Surround"}}},
-            {"button": "DTS_NEURAL_X", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "DTS Neural:X"}}},
-            {"button": "ANTHEMLOGIC_CINEMA", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "AnthemLogic Cinema"}}},
-            {"button": "ANTHEMLOGIC_MUSIC", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "AnthemLogic Music"}}},
-            {"button": "STEREO", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "Stereo"}}},
-            {"button": "MULTI_CHANNEL_STEREO", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "Multi-Channel Stereo"}}},
-            {"button": "DIRECT", "short_press": {"cmd_id": "listening_mode", "params": {"mode": "Direct"}}},
-            
-            # Audio Mode Navigation
-            {"button": "AUDIO_MODE_UP", "short_press": {"cmd_id": "audio_mode_up"}},
-            {"button": "AUDIO_MODE_DOWN", "short_press": {"cmd_id": "audio_mode_down"}},
-            
-            # Tone Controls
-            {"button": "BASS_UP", "short_press": {"cmd_id": "tone_control", "params": {"control": "bass", "direction": "up"}}},
-            {"button": "BASS_DOWN", "short_press": {"cmd_id": "tone_control", "params": {"control": "bass", "direction": "down"}}},
-            {"button": "TREBLE_UP", "short_press": {"cmd_id": "tone_control", "params": {"control": "treble", "direction": "up"}}},
-            {"button": "TREBLE_DOWN", "short_press": {"cmd_id": "tone_control", "params": {"control": "treble", "direction": "down"}}},
-            
-            # Balance Controls
-            {"button": "BALANCE_LEFT", "short_press": {"cmd_id": "balance", "params": {"direction": "left"}}},
-            {"button": "BALANCE_RIGHT", "short_press": {"cmd_id": "balance", "params": {"direction": "right"}}},
-            
-            # Dolby Settings
-            {"button": "DOLBY_DYNAMIC_RANGE_NORMAL", "short_press": {"cmd_id": "dolby_dynamic_range", "params": {"mode": "normal"}}},
-            {"button": "DOLBY_DYNAMIC_RANGE_REDUCED", "short_press": {"cmd_id": "dolby_dynamic_range", "params": {"mode": "reduced"}}},
-            {"button": "DOLBY_DYNAMIC_RANGE_LATE_NIGHT", "short_press": {"cmd_id": "dolby_dynamic_range", "params": {"mode": "late_night"}}},
-            
-            # Dolby Surround Center Spread
-            {"button": "DOLBY_CENTER_SPREAD_ON", "short_press": {"cmd_id": "dolby_center_spread", "params": {"state": "on"}}},
-            {"button": "DOLBY_CENTER_SPREAD_OFF", "short_press": {"cmd_id": "dolby_center_spread", "params": {"state": "off"}}},
-        ]
-        
-        # Define features
+        # Features - Only SEND_CMD (no power control)
         features = [Features.SEND_CMD]
         
-        # Initial attributes
-        attributes = {
-            Attributes.STATE: "ONLINE"
-        }
+        # No STATE attribute needed for remote entities without on_off
+        attributes = {}
         
+        # Initialize base class WITHOUT options
         super().__init__(
             entity_id,
             entity_name,
             features,
             attributes,
-            button_mapping=button_mappings,
             cmd_handler=self.handle_command
         )
+        
+        # Define ALL simple commands
+        simple_commands = [
+            # Listening Modes
+            "DOLBY_SURROUND",
+            "DTS_NEURAL_X",
+            "ANTHEMLOGIC_CINEMA",
+            "ANTHEMLOGIC_MUSIC",
+            "STEREO",
+            "MULTI_CHANNEL_STEREO",
+            "DIRECT",
+            "PLIIX_MOVIE",
+            "PLIIX_MUSIC",
+            "NEO6_CINEMA",
+            "NEO6_MUSIC",
+            # Audio Mode Navigation
+            "AUDIO_MODE_UP",
+            "AUDIO_MODE_DOWN",
+            # Tone Controls
+            "BASS_UP",
+            "BASS_DOWN",
+            "TREBLE_UP",
+            "TREBLE_DOWN",
+            # Balance
+            "BALANCE_LEFT",
+            "BALANCE_RIGHT",
+            # Dolby Settings
+            "DOLBY_DRC_NORMAL",
+            "DOLBY_DRC_REDUCED",
+            "DOLBY_DRC_LATE_NIGHT",
+            "DOLBY_CENTER_SPREAD_ON",
+            "DOLBY_CENTER_SPREAD_OFF"
+        ]
+        
+        # Define UI with pages
+        user_interface = {
+            "pages": [
+                {
+                    "page_id": "audio_modes",
+                    "name": "Audio Modes",
+                    "grid": {"width": 4, "height": 6},
+                    "items": [
+                        # Row 1: Main Modes
+                        {
+                            "type": "text",
+                            "text": "Dolby\nSurround",
+                            "command": {"cmd_id": "DOLBY_SURROUND"},
+                            "location": {"x": 0, "y": 0},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "text",
+                            "text": "DTS\nNeural:X",
+                            "command": {"cmd_id": "DTS_NEURAL_X"},
+                            "location": {"x": 2, "y": 0},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        # Row 2: AnthemLogic
+                        {
+                            "type": "text",
+                            "text": "AnthemLogic\nCinema",
+                            "command": {"cmd_id": "ANTHEMLOGIC_CINEMA"},
+                            "location": {"x": 0, "y": 1},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "text",
+                            "text": "AnthemLogic\nMusic",
+                            "command": {"cmd_id": "ANTHEMLOGIC_MUSIC"},
+                            "location": {"x": 2, "y": 1},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        # Row 3: Stereo Modes
+                        {
+                            "type": "text",
+                            "text": "Stereo",
+                            "command": {"cmd_id": "STEREO"},
+                            "location": {"x": 0, "y": 2},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "text",
+                            "text": "Multi-Ch\nStereo",
+                            "command": {"cmd_id": "MULTI_CHANNEL_STEREO"},
+                            "location": {"x": 2, "y": 2},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        # Row 4: Direct + Mode Navigation
+                        {
+                            "type": "text",
+                            "text": "Direct",
+                            "command": {"cmd_id": "DIRECT"},
+                            "location": {"x": 0, "y": 3},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:up-arrow",
+                            "command": {"cmd_id": "AUDIO_MODE_UP"},
+                            "location": {"x": 2, "y": 3}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:down-arrow",
+                            "command": {"cmd_id": "AUDIO_MODE_DOWN"},
+                            "location": {"x": 3, "y": 3}
+                        }
+                    ]
+                },
+                {
+                    "page_id": "tone_control",
+                    "name": "Tone Control",
+                    "grid": {"width": 4, "height": 6},
+                    "items": [
+                        # Bass Controls
+                        {
+                            "type": "text",
+                            "text": "Bass",
+                            "location": {"x": 0, "y": 0},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:up-arrow",
+                            "command": {"cmd_id": "BASS_UP"},
+                            "location": {"x": 2, "y": 0}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:down-arrow",
+                            "command": {"cmd_id": "BASS_DOWN"},
+                            "location": {"x": 3, "y": 0}
+                        },
+                        # Treble Controls
+                        {
+                            "type": "text",
+                            "text": "Treble",
+                            "location": {"x": 0, "y": 1},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:up-arrow",
+                            "command": {"cmd_id": "TREBLE_UP"},
+                            "location": {"x": 2, "y": 1}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:down-arrow",
+                            "command": {"cmd_id": "TREBLE_DOWN"},
+                            "location": {"x": 3, "y": 1}
+                        },
+                        # Balance Controls
+                        {
+                            "type": "text",
+                            "text": "Balance",
+                            "location": {"x": 0, "y": 2},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:left-arrow",
+                            "command": {"cmd_id": "BALANCE_LEFT"},
+                            "location": {"x": 2, "y": 2}
+                        },
+                        {
+                            "type": "icon",
+                            "icon": "uc:right-arrow",
+                            "command": {"cmd_id": "BALANCE_RIGHT"},
+                            "location": {"x": 3, "y": 2}
+                        }
+                    ]
+                },
+                {
+                    "page_id": "dolby_settings",
+                    "name": "Dolby Settings",
+                    "grid": {"width": 4, "height": 6},
+                    "items": [
+                        # Dynamic Range
+                        {
+                            "type": "text",
+                            "text": "DRC\nNormal",
+                            "command": {"cmd_id": "DOLBY_DRC_NORMAL"},
+                            "location": {"x": 0, "y": 0},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "text",
+                            "text": "DRC\nReduced",
+                            "command": {"cmd_id": "DOLBY_DRC_REDUCED"},
+                            "location": {"x": 2, "y": 0},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "text",
+                            "text": "DRC\nLate Night",
+                            "command": {"cmd_id": "DOLBY_DRC_LATE_NIGHT"},
+                            "location": {"x": 0, "y": 1},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        # Center Spread
+                        {
+                            "type": "text",
+                            "text": "Center\nSpread ON",
+                            "command": {"cmd_id": "DOLBY_CENTER_SPREAD_ON"},
+                            "location": {"x": 0, "y": 2},
+                            "size": {"width": 2, "height": 1}
+                        },
+                        {
+                            "type": "text",
+                            "text": "Center\nSpread OFF",
+                            "command": {"cmd_id": "DOLBY_CENTER_SPREAD_OFF"},
+                            "location": {"x": 2, "y": 2},
+                            "size": {"width": 2, "height": 1}
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        # Set options as property AFTER initialization
+        self.options = {
+            Options.SIMPLE_COMMANDS: simple_commands,
+            "user_interface": user_interface
+        }
+        
+        _LOG.info("[%s] Remote entity initialized with %d commands and 3 UI pages", 
+                  entity_id, len(simple_commands))
         
         # Register for device events
         device.events.on("UPDATE", self._on_device_update)
     
     async def _on_device_update(self, entity_id: str, update_data: dict[str, Any]) -> None:
         """Handle device state updates."""
-        # Remote entity doesn't need state updates currently
         pass
     
     async def handle_command(
@@ -142,78 +307,96 @@ class AnthemRemote(Remote):
         cmd_id: str,
         params: dict[str, Any] | None
     ) -> StatusCodes:
-        """Handle remote commands."""
         _LOG.info("[%s] Command: %s %s", self.id, cmd_id, params or "")
         
         try:
             zone = self._zone_config.zone_number
             
-            if cmd_id == "listening_mode":
-                mode = params.get("mode")
-                mode_num = self.LISTENING_MODES.get(mode)
-                if mode_num is not None:
-                    success = await self._device._send_command(f"Z{zone}ALM{mode_num}")
-                    return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+            # CRITICAL: Check for send_cmd first
+            if cmd_id != Commands.SEND_CMD:
+                _LOG.warning("[%s] Unsupported command type: %s", self.id, cmd_id)
+                return StatusCodes.NOT_FOUND
+            
+            if not params or "command" not in params:
+                _LOG.error("[%s] Missing command parameter", self.id)
                 return StatusCodes.BAD_REQUEST
             
-            elif cmd_id == "audio_mode_up":
-                success = await self._device._send_command(f"Z{zone}AUP")
-                return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+            command = params["command"]
+            _LOG.debug("[%s] Executing command: %s", self.id, command)
             
-            elif cmd_id == "audio_mode_down":
-                success = await self._device._send_command(f"Z{zone}ADN")
-                return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+            # Listening Modes
+            if command == "DOLBY_SURROUND":
+                await self._device._send_command(f"Z{zone}ALM3")
+                return StatusCodes.OK
+            elif command == "DTS_NEURAL_X":
+                await self._device._send_command(f"Z{zone}ALM4")
+                return StatusCodes.OK
+            elif command == "ANTHEMLOGIC_CINEMA":
+                await self._device._send_command(f"Z{zone}ALM1")
+                return StatusCodes.OK
+            elif command == "ANTHEMLOGIC_MUSIC":
+                await self._device._send_command(f"Z{zone}ALM2")
+                return StatusCodes.OK
+            elif command == "STEREO":
+                await self._device._send_command(f"Z{zone}ALM5")
+                return StatusCodes.OK
+            elif command == "MULTI_CHANNEL_STEREO":
+                await self._device._send_command(f"Z{zone}ALM6")
+                return StatusCodes.OK
+            elif command == "DIRECT":
+                await self._device._send_command(f"Z{zone}ALM15")
+                return StatusCodes.OK
             
-            elif cmd_id == "tone_control":
-                control = params.get("control")  # "bass" or "treble"
-                direction = params.get("direction")  # "up" or "down"
-                
-                control_num = 0 if control == "bass" else 1
-                command = f"Z{zone}TUP{control_num}" if direction == "up" else f"Z{zone}TDN{control_num}"
-                
-                success = await self._device._send_command(command)
-                return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+            # Audio Mode Navigation
+            elif command == "AUDIO_MODE_UP":
+                await self._device._send_command(f"Z{zone}AUP")
+                return StatusCodes.OK
+            elif command == "AUDIO_MODE_DOWN":
+                await self._device._send_command(f"Z{zone}ADN")
+                return StatusCodes.OK
             
-            elif cmd_id == "balance":
-                direction = params.get("direction")  # "left" or "right"
-                command = f"Z{zone}BLT" if direction == "left" else f"Z{zone}BRT"
-                
-                success = await self._device._send_command(command)
-                return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+            # Tone Controls
+            elif command == "BASS_UP":
+                await self._device._send_command(f"Z{zone}TUP0")
+                return StatusCodes.OK
+            elif command == "BASS_DOWN":
+                await self._device._send_command(f"Z{zone}TDN0")
+                return StatusCodes.OK
+            elif command == "TREBLE_UP":
+                await self._device._send_command(f"Z{zone}TUP1")
+                return StatusCodes.OK
+            elif command == "TREBLE_DOWN":
+                await self._device._send_command(f"Z{zone}TDN1")
+                return StatusCodes.OK
             
-            elif cmd_id == "dolby_dynamic_range":
-                mode = params.get("mode")
-                mode_map = {"normal": 0, "reduced": 1, "late_night": 2}
-                mode_num = mode_map.get(mode)
-                
-                if mode_num is not None:
-                    success = await self._device._send_command(f"Z{zone}DYN{mode_num}")
-                    return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
-                return StatusCodes.BAD_REQUEST
+            # Balance
+            elif command == "BALANCE_LEFT":
+                await self._device._send_command(f"Z{zone}BLT")
+                return StatusCodes.OK
+            elif command == "BALANCE_RIGHT":
+                await self._device._send_command(f"Z{zone}BRT")
+                return StatusCodes.OK
             
-            elif cmd_id == "dolby_center_spread":
-                state = params.get("state")
-                state_num = 1 if state == "on" else 0
-                
-                success = await self._device._send_command(f"Z{zone}DSCS{state_num}")
-                return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
-            
-            elif cmd_id == "speaker_level":
-                channel = params.get("channel")
-                direction = params.get("direction")
-                
-                channel_num = self.SPEAKER_CHANNELS.get(channel)
-                if channel_num is None:
-                    return StatusCodes.BAD_REQUEST
-                
-                command = f"Z{zone}LUP{channel_num}" if direction == "up" else f"Z{zone}LDN{channel_num}"
-                
-                success = await self._device._send_command(command)
-                return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+            # Dolby Settings
+            elif command == "DOLBY_DRC_NORMAL":
+                await self._device._send_command(f"Z{zone}DYN0")
+                return StatusCodes.OK
+            elif command == "DOLBY_DRC_REDUCED":
+                await self._device._send_command(f"Z{zone}DYN1")
+                return StatusCodes.OK
+            elif command == "DOLBY_DRC_LATE_NIGHT":
+                await self._device._send_command(f"Z{zone}DYN2")
+                return StatusCodes.OK
+            elif command == "DOLBY_CENTER_SPREAD_ON":
+                await self._device._send_command(f"Z{zone}DSCS1")
+                return StatusCodes.OK
+            elif command == "DOLBY_CENTER_SPREAD_OFF":
+                await self._device._send_command(f"Z{zone}DSCS0")
+                return StatusCodes.OK
             
             else:
-                _LOG.warning("[%s] Unsupported command: %s", self.id, cmd_id)
-                return StatusCodes.OK
+                _LOG.warning("[%s] Unknown audio command: %s", self.id, command)
+                return StatusCodes.NOT_FOUND
         
         except Exception as err:
             _LOG.error("[%s] Error executing command %s: %s", self.id, cmd_id, err)
