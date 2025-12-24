@@ -47,35 +47,24 @@ jobs:
               pyinstaller --clean --onedir --name driver \
                 --add-data driver.json:. \
                 --collect-all zeroconf \
+                --collect-all ucapi \
                 --collect-all ucapi_framework \
                 uc_intg_${INTG_NAME}/__main__.py"
 
       - name: Prepare artifacts
         shell: bash
         run: |
-          # Create artifacts directory structure
           mkdir -p artifacts/bin
-          
-          # Move PyInstaller output to bin directory
           mv dist/driver/* artifacts/bin/
-          
-          # Copy driver.json to root of artifacts (CRITICAL!)
           cp driver.json artifacts/
-          
-          # Set artifact name
           echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
-          
-          # Show structure for debugging
           echo "=== Artifact structure ==="
           ls -laR artifacts/
           
       - name: Create upload artifact archive
         shell: bash
         run: | 
-          # Create tar.gz from artifacts directory
           tar czvf ${{ env.ARTIFACT_NAME }}.tar.gz -C ${GITHUB_WORKSPACE}/artifacts .
-          
-          # Verify archive contents
           echo "=== Archive contents ==="
           tar tzvf ${{ env.ARTIFACT_NAME }}.tar.gz
           ls -lah ${{ env.ARTIFACT_NAME }}.tar.gz
