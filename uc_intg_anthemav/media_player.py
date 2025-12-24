@@ -9,6 +9,9 @@ import logging
 from typing import Any
 
 from ucapi import StatusCodes
+<<<<<<< HEAD
+from ucapi.media_player import Attributes, Commands, DeviceClasses, Features, MediaPlayer, States, Options
+=======
 from ucapi.media_player import (
     Attributes,
     Commands,
@@ -19,6 +22,7 @@ from ucapi.media_player import (
     Options,
 )
 from ucapi_framework import DeviceEvents
+>>>>>>> main
 
 from uc_intg_anthemav.config import AnthemDeviceConfig, ZoneConfig
 from uc_intg_anthemav.device import AnthemDevice
@@ -28,6 +32,16 @@ _LOG = logging.getLogger(__name__)
 
 class AnthemMediaPlayer(MediaPlayer):
     """Media player entity for Anthem A/V receiver zone."""
+<<<<<<< HEAD
+    
+    def __init__(self, device_config: AnthemDeviceConfig, device: AnthemDevice, zone_config: ZoneConfig):
+        """Initialize media player entity."""
+        self._device = device
+        self._device_config = device_config
+        self._zone_config = zone_config
+        
+        # Create entity ID
+=======
 
     def __init__(
         self,
@@ -40,11 +54,19 @@ class AnthemMediaPlayer(MediaPlayer):
         self._device_config = device_config
         self._zone_config = zone_config
 
+>>>>>>> main
         if zone_config.zone_number == 1:
+            entity_id = f"media_player.{device_config.identifier}"
             entity_name = device_config.name
         else:
+            entity_id = f"media_player.{device_config.identifier}.zone{zone_config.zone_number}"
             entity_name = f"{device_config.name} {zone_config.name}"
+<<<<<<< HEAD
+        
+        # Define features
+=======
 
+>>>>>>> main
         features = [
             Features.ON_OFF,
             Features.VOLUME,
@@ -54,6 +76,12 @@ class AnthemMediaPlayer(MediaPlayer):
             Features.UNMUTE,
             Features.SELECT_SOURCE,
         ]
+<<<<<<< HEAD
+        
+        # Initial attributes
+        # CRITICAL: SOURCE_LIST must be empty initially!
+        # It gets populated after input discovery via device events
+=======
 
         source_list = [
             "HDMI 1",
@@ -73,14 +101,22 @@ class AnthemMediaPlayer(MediaPlayer):
             "ARC",
         ]
 
+>>>>>>> main
         attributes = {
             Attributes.STATE: States.UNAVAILABLE,
             Attributes.VOLUME: 0,
             Attributes.MUTED: False,
             Attributes.SOURCE: "",
+<<<<<<< HEAD
+            Attributes.SOURCE_LIST: []  # Empty! Gets populated after discovery
+        }
+        
+        # Simple commands
+=======
             Attributes.SOURCE_LIST: source_list,
         }
 
+>>>>>>> main
         options = {
             Options.SIMPLE_COMMANDS: [
                 Commands.ON,
@@ -97,10 +133,23 @@ class AnthemMediaPlayer(MediaPlayer):
             features,
             attributes,
             device_class=DeviceClasses.RECEIVER,
-            area=device_config.name if zone_config.zone_number > 1 else None,
             cmd_handler=self.handle_command,
             options=options,
         )
+<<<<<<< HEAD
+        
+        _LOG.info("[%s] Entity initialized for Zone %d", self.id, zone_config.zone_number)
+    
+    async def handle_command(
+        self,
+        entity: MediaPlayer,
+        cmd_id: str,
+        params: dict[str, Any] | None
+    ) -> StatusCodes:
+        """Handle media player commands."""
+        _LOG.info("[%s] Command: %s %s", self.id, cmd_id, params or "")
+        
+=======
 
     # Event handlers are handled by the driver. I moved yours there and deleted the ones that the framework was generically handling
     # Driver also registers them so no need to do that either.
@@ -129,6 +178,7 @@ class AnthemMediaPlayer(MediaPlayer):
         """Handle entity commands."""
         _LOG.info(f"Command {cmd_id} for {self.id}")
 
+>>>>>>> main
         try:
             zone = self._zone_config.zone_number
 
@@ -143,7 +193,8 @@ class AnthemMediaPlayer(MediaPlayer):
             elif cmd_id == Commands.VOLUME:
                 if params and "volume" in params:
                     volume_pct = float(params["volume"])
-                    volume_db = self._percentage_to_db(volume_pct)
+                    # Convert percentage to dB (-90 to 0)
+                    volume_db = int((volume_pct * 90 / 100) - 90)
                     success = await self._device.set_volume(volume_db, zone)
                     return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
                 return StatusCodes.BAD_REQUEST
@@ -180,8 +231,15 @@ class AnthemMediaPlayer(MediaPlayer):
                 return StatusCodes.BAD_REQUEST
 
             else:
-                _LOG.debug(f"Suppressing unsupported command: {cmd_id}")
+                _LOG.debug("[%s] Unsupported command: %s", self.id, cmd_id)
                 return StatusCodes.OK
+<<<<<<< HEAD
+        
+        except Exception as err:
+            _LOG.error("[%s] Error executing command %s: %s", self.id, cmd_id, err)
+            return StatusCodes.SERVER_ERROR
+    
+=======
 
         except Exception as e:
             _LOG.error(f"Error executing command {cmd_id}: {e}")
@@ -191,6 +249,7 @@ class AnthemMediaPlayer(MediaPlayer):
         """Query device for current state."""
         await self._device.query_all_status(self._zone_config.zone_number)
 
+>>>>>>> main
     @property
     def zone_number(self) -> int:
         """Get zone number."""

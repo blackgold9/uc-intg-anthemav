@@ -9,6 +9,10 @@ import asyncio
 import logging
 from typing import Any
 
+<<<<<<< HEAD
+from ucapi import EntityTypes, media_player
+from ucapi_framework import BaseIntegrationDriver
+=======
 from ucapi import EntityTypes
 from ucapi.media_player import Attributes, States
 from ucapi_framework import (
@@ -17,15 +21,159 @@ from ucapi_framework import (
     create_entity_id,
     get_config_path,
 )
+>>>>>>> main
 
-from uc_intg_anthemav.config import AnthemDeviceConfig
+from uc_intg_anthemav.config import AnthemConfigManager, AnthemDeviceConfig
 from uc_intg_anthemav.device import AnthemDevice
 from uc_intg_anthemav.media_player import AnthemMediaPlayer
+<<<<<<< HEAD
+from uc_intg_anthemav.remote import AnthemRemote
+=======
 from uc_intg_anthemav.setup_flow import AnthemSetupFlow
+>>>>>>> main
 
 _LOG = logging.getLogger(__name__)
 
 
+<<<<<<< HEAD
+class AnthemDriver(BaseIntegrationDriver[AnthemDevice, AnthemDeviceConfig]):
+    """Anthem A/V integration driver."""
+    
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        super().__init__(
+            device_class=AnthemDevice,
+            entity_classes=[],
+            loop=loop,
+            driver_id="anthemav"
+        )
+    
+    def create_entities(
+        self,
+        device_config: AnthemDeviceConfig,
+        device: AnthemDevice
+    ) -> list[AnthemMediaPlayer | AnthemRemote]:
+        """Create both media player and remote entities for each zone."""
+        entities = []
+        
+        for zone_config in device_config.zones:
+            if not zone_config.enabled:
+                continue
+            
+            # Create Media Player entity
+            media_player_entity = AnthemMediaPlayer(device_config, device, zone_config)
+            entities.append(media_player_entity)
+            _LOG.info("Created media player: %s for %s Zone %d",
+                     media_player_entity.id, device_config.name, zone_config.zone_number)
+            
+            # Create Remote entity
+            remote_entity = AnthemRemote(device_config, device, zone_config)
+            entities.append(remote_entity)
+            _LOG.info("Created remote: %s for %s Zone %d audio controls",
+                     remote_entity.id, device_config.name, zone_config.zone_number)
+        
+        return entities
+    
+    async def refresh_entity_state(self, entity_id: str) -> None:
+        """
+        Refresh entity state by querying device and updating SOURCE_LIST.
+        
+        CRITICAL FIX: This method does THREE things:
+        1. Sets STATE based on connection (via super())
+        2. Copies SOURCE_LIST from device to configured entity (THE FIX!)
+        3. Queries device for current volume/mute/source
+        """
+        _LOG.info("[%s] Refreshing entity state", entity_id)
+        
+        # Step 1: Call parent to set STATE
+        await super().refresh_entity_state(entity_id)
+        
+        # Get device
+        device_id = self.device_from_entity_id(entity_id)
+        if not device_id:
+            _LOG.warning("[%s] Could not extract device_id", entity_id)
+            return
+        
+        device = self._configured_devices.get(device_id)
+        if not device:
+            _LOG.warning("[%s] Device %s not found", entity_id, device_id)
+            return
+        
+        if not device.is_connected:
+            _LOG.debug("[%s] Device not connected, skipping query", entity_id)
+            return
+        
+        configured_entity = self.api.configured_entities.get(entity_id)
+        if not configured_entity:
+            _LOG.debug("[%s] Entity not configured, skipping query", entity_id)
+            return
+        
+        # Only process media_player entities
+        if configured_entity.entity_type != EntityTypes.MEDIA_PLAYER:
+            _LOG.debug("[%s] Not a media player, no query needed", entity_id)
+            return
+        
+        # Step 2: CRITICAL FIX - Copy SOURCE_LIST from device to configured entity
+        # Without this, activity configuration has no source dropdown!
+        source_list = device.get_input_list()
+        if source_list:
+            self.api.configured_entities.update_attributes(
+                entity_id, 
+                {media_player.Attributes.SOURCE_LIST: source_list}
+            )
+            _LOG.info("[%s] Updated SOURCE_LIST with %d sources", entity_id, len(source_list))
+        else:
+            _LOG.warning("[%s] No source list available from device", entity_id)
+        
+        # Step 3: Extract zone number and query device
+        parts = entity_id.split(".")
+        if len(parts) == 2:
+            zone_num = 1  # Main zone
+        elif len(parts) == 3 and parts[2].startswith("zone"):
+            try:
+                zone_num = int(parts[2].replace("zone", ""))
+            except ValueError:
+                _LOG.error("[%s] Invalid zone format: %s", entity_id, parts[2])
+                return
+        else:
+            zone_num = 1
+        
+        # Query device - this triggers responses that emit UPDATE events
+        _LOG.info("[%s] Querying device status for Zone %d", entity_id, zone_num)
+        await device.query_status(zone_num)
+    
+    def device_from_entity_id(self, entity_id: str) -> str | None:
+        """Extract device ID from entity ID."""
+        if not entity_id or "." not in entity_id:
+            return None
+        
+        parts = entity_id.split(".")
+        
+        # Format: type.device_id or type.device_id.sub
+        if len(parts) >= 2:
+            return parts[1]
+        
+        return None
+    
+    def get_entity_ids_for_device(self, device_id: str) -> list[str]:
+        """Get all entity IDs for a device."""
+        device_config = self.get_device_config(device_id)
+        if not device_config:
+            return []
+        
+        entity_ids = []
+        for zone in device_config.zones:
+            if not zone.enabled:
+                continue
+            
+            if zone.zone_number == 1:
+                entity_ids.append(f"media_player.{device_id}")
+                entity_ids.append(f"remote.{device_id}")
+            else:
+                entity_ids.append(f"media_player.{device_id}.zone{zone.zone_number}")
+                entity_ids.append(f"remote.{device_id}.zone{zone.zone_number}")
+        
+        return entity_ids
+=======
 class AnthemDriver(BaseIntegrationDriver):
     _device_config: AnthemDeviceConfig
     _device: AnthemDevice
@@ -164,3 +312,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+>>>>>>> main
