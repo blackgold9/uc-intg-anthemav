@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from ucapi_framework import PersistentConnectionDevice, DeviceEvents
+from ucapi.media_player import Attributes as MediaAttributes
 
 from .config import AnthemDeviceConfig
 
@@ -26,37 +27,40 @@ class AnthemDevice(PersistentConnectionDevice):
         self._zone_states: dict[int, dict[str, Any]] = {}
         self._input_names: dict[int, str] = {}
         self._input_count: int = 0
-        
+
     @property
     def identifier(self) -> str:
         return self._device_config.identifier
-    
+
     @property
     def name(self) -> str:
         return self._device_config.name
-    
+
     @property
     def address(self) -> str:
         return self._device_config.host
-    
+
     @property
     def log_id(self) -> str:
         return f"{self.name} ({self.address})"
-    
+
     async def establish_connection(self) -> Any:
         """
         Establish TCP connection to Anthem receiver.
-        
+
         :return: Tuple of (reader, writer)
         """
-        _LOG.info("[%s] Establishing TCP connection to %s:%d", 
-                  self.log_id, self._device_config.host, self._device_config.port)
-        
-        self._reader, self._writer = await asyncio.open_connection(
+        _LOG.info(
+            "[%s] Establishing TCP connection to %s:%d",
+            self.log_id,
             self._device_config.host,
-            self._device_config.port
+            self._device_config.port,
         )
-        
+
+        self._reader, self._writer = await asyncio.open_connection(
+            self._device_config.host, self._device_config.port
+        )
+
         # Send initialization sequence
         await self._send_command("ECH0")  # Disable command echo
         await asyncio.sleep(0.1)
@@ -64,16 +68,16 @@ class AnthemDevice(PersistentConnectionDevice):
         await asyncio.sleep(0.1)
         await self._send_command("ICN?")  # Query input count
         await asyncio.sleep(0.2)
-        
+
         # Query initial state for all zones
         for zone in self._device_config.zones:
             if zone.enabled:
                 await self._send_command(f"Z{zone.zone_number}POW?")
                 await asyncio.sleep(0.05)
-        
+
         _LOG.info("[%s] Connection established and initialized", self.log_id)
         return (self._reader, self._writer)
-    
+
     async def close_connection(self) -> None:
         """Close TCP connection."""
         if self._writer:
@@ -82,54 +86,54 @@ class AnthemDevice(PersistentConnectionDevice):
                 await self._writer.wait_closed()
             except Exception as err:
                 _LOG.debug("[%s] Error closing connection: %s", self.log_id, err)
-        
+
         self._reader = None
         self._writer = None
-    
+
     async def maintain_connection(self) -> None:
         buffer = ""
         _LOG.debug("[%s] Message loop started", self.log_id)
-        
+
         while self._reader and not self._reader.at_eof():
             try:
                 data = await asyncio.wait_for(self._reader.read(1024), timeout=120.0)
-                
+
                 if not data:
                     _LOG.warning("[%s] Connection closed by device", self.log_id)
                     break
-                
-                decoded = data.decode('ascii', errors='ignore')
+
+                decoded = data.decode("ascii", errors="ignore")
                 buffer += decoded
-                
+
                 # CRITICAL: Split on semicolon, not newline!
-                while ';' in buffer:
-                    line, buffer = buffer.split(';', 1)
+                while ";" in buffer:
+                    line, buffer = buffer.split(";", 1)
                     line = line.strip()
                     if line:
                         await self._process_response(line)
-                
+
             except asyncio.TimeoutError:
                 # Normal timeout, continue
                 continue
             except Exception as err:
                 _LOG.error("[%s] Error in message loop: %s", self.log_id, err)
                 break
-        
+
         _LOG.debug("[%s] Message loop ended", self.log_id)
-    
+
     async def _send_command(self, command: str) -> bool:
         """
         Send command to receiver.
-        
+
         Commands are terminated with carriage return (\r), but responses
         come back terminated with semicolon (;).
         """
         if not self._writer:
             _LOG.warning("[%s] Cannot send command - not connected", self.log_id)
             return False
-        
+
         try:
-            cmd_bytes = f"{command}\r".encode('ascii')
+            cmd_bytes = f"{command}\r".encode("ascii")
             self._writer.write(cmd_bytes)
             await self._writer.drain()
             _LOG.debug("[%s] Sent command: %s", self.log_id, command)
@@ -137,19 +141,19 @@ class AnthemDevice(PersistentConnectionDevice):
         except Exception as err:
             _LOG.error("[%s] Error sending command %s: %s", self.log_id, command, err)
             return False
-    
+
     async def _process_response(self, response: str) -> None:
         """Process a response from the receiver."""
         _LOG.debug("[%s] RECEIVED: %s", self.log_id, response)
-        
+
         # Ignore error responses
         if response.startswith("!I") or response.startswith("!E"):
             _LOG.warning("[%s] Device error: %s", self.log_id, response)
             return
-        
+
         # Update internal state
         self._update_state_from_response(response)
-    
+
     def _update_state_from_response(self, response: str) -> None:
         """Update device state from response."""
         # Device info responses
@@ -157,195 +161,253 @@ class AnthemDevice(PersistentConnectionDevice):
             model = response[3:].strip()
             self._state = {"model": model}
             _LOG.info("[%s] Model: %s", self.log_id, model)
-        
+
         elif response.startswith("ICN"):
-            count_match = re.match(r'ICN(\d+)', response)
+            count_match = re.match(r"ICN(\d+)", response)
             if count_match:
                 self._input_count = int(count_match.group(1))
                 _LOG.info("[%s] Input count: %d", self.log_id, self._input_count)
                 # Query input names
                 asyncio.create_task(self._discover_input_names())
-        
+
         elif response.startswith("ISN") and len(response) > 5:
-            input_match = re.match(r'ISN(\d{2})(.+)', response)
+            input_match = re.match(r"ISN(\d{2})(.+)", response)
             if input_match:
                 input_num = int(input_match.group(1))
                 input_name = input_match.group(2).strip()
                 self._input_names[input_num] = input_name
                 _LOG.debug("[%s] Input %d: %s", self.log_id, input_num, input_name)
-                
+
                 # If we've discovered all inputs, emit source list update to all entities
                 if len(self._input_names) == self._input_count:
-                    _LOG.info("[%s] All %d inputs discovered, updating source lists", self.log_id, self._input_count)
+                    _LOG.info(
+                        "[%s] All %d inputs discovered, updating source lists",
+                        self.log_id,
+                        self._input_count,
+                    )
                     source_list = self.get_input_list()
-                    
+
                     # Emit source_list update to all zones
                     for zone_config in self._device_config.zones:
                         if zone_config.enabled:
-                            entity_id = self._get_entity_id_for_zone(zone_config.zone_number)
+                            entity_id = self._get_entity_id_for_zone(
+                                zone_config.zone_number
+                            )
                             if entity_id:
-                                self.events.emit(DeviceEvents.UPDATE, entity_id, {"source_list": source_list})
-        
+                                self.events.emit(
+                                    DeviceEvents.UPDATE,
+                                    entity_id,
+                                    {MediaAttributes.SOURCE_LIST: source_list},
+                                )
+
         # Zone state responses
         elif response.startswith("Z"):
-            zone_match = re.match(r'Z(\d+)', response)
+            zone_match = re.match(r"Z(\d+)", response)
             if zone_match:
                 zone_num = int(zone_match.group(1))
-                
+
                 if zone_num not in self._zone_states:
                     self._zone_states[zone_num] = {}
-                
+
                 state = self._zone_states[zone_num]
                 entity_id = self._get_entity_id_for_zone(zone_num)
-                
+
                 if "POW" in response:
                     power = "1" in response
                     state["power"] = power
                     new_state = "ON" if power else "OFF"
                     self._state = new_state
-                    
+
                     # Emit update for this specific zone entity
                     if entity_id:
-                        self.events.emit(DeviceEvents.UPDATE, entity_id, {"state": new_state})
-                
+                        self.events.emit(
+                            DeviceEvents.UPDATE,
+                            entity_id,
+                            {MediaAttributes.STATE: new_state},
+                        )
+
                 elif "VOL" in response:
-                    vol_match = re.search(r'VOL(-?\d+)', response)
+                    vol_match = re.search(r"VOL(-?\d+)", response)
                     if vol_match:
                         volume_db = int(vol_match.group(1))
                         state["volume_db"] = volume_db
                         # Convert to percentage (0-100 range)
                         volume_pct = int(((volume_db + 90) / 90) * 100)
-                        
+
                         if entity_id:
-                            self.events.emit(DeviceEvents.UPDATE, entity_id, {
-                                "volume": volume_pct,
-                                "state": state.get("power", False) and "ON" or "OFF"
-                            })
-                
+                            self.events.emit(
+                                DeviceEvents.UPDATE,
+                                entity_id,
+                                {
+                                    MediaAttributes.VOLUME: volume_pct,
+                                    MediaAttributes.STATE: state.get("power", False)
+                                    and "ON"
+                                    or "OFF",
+                                },
+                            )
+
                 elif "MUT" in response:
                     muted = "1" in response
                     state["muted"] = muted
-                    
+
                     if entity_id:
-                        self.events.emit(DeviceEvents.UPDATE, entity_id, {
-                            "muted": muted,
-                            "state": state.get("power", False) and "ON" or "OFF"
-                        })
-                
+                        self.events.emit(
+                            DeviceEvents.UPDATE,
+                            entity_id,
+                            {
+                                MediaAttributes.MUTED: muted,
+                                MediaAttributes.STATE: state.get("power", False)
+                                and "ON"
+                                or "OFF",
+                            },
+                        )
+
                 elif "INP" in response:
-                    inp_match = re.search(r'INP(\d+)', response)
+                    inp_match = re.search(r"INP(\d+)", response)
                     if inp_match:
                         input_num = int(inp_match.group(1))
                         state["input"] = input_num
-                        input_name = self._input_names.get(input_num, f"Input {input_num}")
+                        input_name = self._input_names.get(
+                            input_num, f"Input {input_num}"
+                        )
                         state["input_name"] = input_name
-                        
+
                         if entity_id:
-                            self.events.emit(DeviceEvents.UPDATE, entity_id, {
-                                "source": input_name,
-                                "state": state.get("power", False) and "ON" or "OFF"
-                            })
-    
+                            self.events.emit(
+                                DeviceEvents.UPDATE,
+                                entity_id,
+                                {
+                                    MediaAttributes.SOURCE: input_name,
+                                    MediaAttributes.STATE: state.get("power", False)
+                                    and "ON"
+                                    or "OFF",
+                                },
+                            )
+
     def _get_entity_id_for_zone(self, zone_num: int) -> str | None:
         """Get entity ID for a zone number."""
         if zone_num == 1:
             return f"media_player.{self.identifier}"
         return f"media_player.{self.identifier}.zone{zone_num}"
-    
+
     async def _discover_input_names(self) -> None:
         """Query input names from receiver."""
         for input_num in range(1, self._input_count + 1):
             await self._send_command(f"ISN{input_num:02d}?")
             await asyncio.sleep(0.05)
-    
+
     # ========================================================================
     # Public Control Methods
     # ========================================================================
-    
+
     async def power_on(self, zone: int = 1) -> bool:
         """Turn on the specified zone."""
         return await self._send_command(f"Z{zone}POW1")
-    
+
     async def power_off(self, zone: int = 1) -> bool:
         """Turn off the specified zone."""
         return await self._send_command(f"Z{zone}POW0")
-    
+
     async def set_volume(self, volume_db: int, zone: int = 1) -> bool:
         """Set volume in dB (-90 to 0)."""
         volume_db = max(-90, min(0, volume_db))
         return await self._send_command(f"Z{zone}VOL{volume_db}")
-    
+
     async def volume_up(self, zone: int = 1) -> bool:
         """Increase volume by 1dB."""
         return await self._send_command(f"Z{zone}VUP")
-    
+
     async def volume_down(self, zone: int = 1) -> bool:
         """Decrease volume by 1dB."""
         return await self._send_command(f"Z{zone}VDN")
-    
+
     async def set_mute(self, muted: bool, zone: int = 1) -> bool:
         """Set mute state."""
         return await self._send_command(f"Z{zone}MUT{'1' if muted else '0'}")
-    
+
     async def select_input(self, input_num: int, zone: int = 1) -> bool:
         """Select input source."""
         return await self._send_command(f"Z{zone}INP{input_num}")
-    
+
     async def query_status(self, zone: int = 1) -> bool:
         """Query all status for a zone."""
-        commands = [
-            f"Z{zone}POW?",
-            f"Z{zone}VOL?",
-            f"Z{zone}MUT?",
-            f"Z{zone}INP?"
-        ]
+        commands = [f"Z{zone}POW?", f"Z{zone}VOL?", f"Z{zone}MUT?", f"Z{zone}INP?"]
         for cmd in commands:
             await self._send_command(cmd)
             await asyncio.sleep(0.05)
         return True
-    
+
     def get_input_list(self) -> list[str]:
         if self._device_config.discovered_inputs:
-            _LOG.debug("[%s] Using discovered inputs from config (%d sources)",
-                      self.log_id, len(self._device_config.discovered_inputs))
+            _LOG.debug(
+                "[%s] Using discovered inputs from config (%d sources)",
+                self.log_id,
+                len(self._device_config.discovered_inputs),
+            )
             return self._device_config.discovered_inputs
-        
+
         # PRIORITY 2: Use runtime discovered names
         if self._input_names and self._input_count > 0:
-            _LOG.debug("[%s] Using runtime discovered inputs (%d sources)",
-                      self.log_id, self._input_count)
+            _LOG.debug(
+                "[%s] Using runtime discovered inputs (%d sources)",
+                self.log_id,
+                self._input_count,
+            )
             return [
-                self._input_names.get(i, f"Input {i}") 
+                self._input_names.get(i, f"Input {i}")
                 for i in range(1, self._input_count + 1)
             ]
-        
+
         # PRIORITY 3: Fallback to defaults
         _LOG.debug("[%s] Using default input list (discovery incomplete)", self.log_id)
         return [
-            "HDMI 1", "HDMI 2", "HDMI 3", "HDMI 4",
-            "HDMI 5", "HDMI 6", "HDMI 7", "HDMI 8",
-            "Analog 1", "Analog 2",
-            "Digital 1", "Digital 2",
-            "USB", "Network", "ARC"
+            "HDMI 1",
+            "HDMI 2",
+            "HDMI 3",
+            "HDMI 4",
+            "HDMI 5",
+            "HDMI 6",
+            "HDMI 7",
+            "HDMI 8",
+            "Analog 1",
+            "Analog 2",
+            "Digital 1",
+            "Digital 2",
+            "USB",
+            "Network",
+            "ARC",
         ]
-        return [self._input_names.get(i, f"Input {i}") for i in range(1, self._input_count + 1)]
-    
+        return [
+            self._input_names.get(i, f"Input {i}")
+            for i in range(1, self._input_count + 1)
+        ]
+
     def get_input_number_by_name(self, name: str) -> int | None:
         """Get input number by name."""
         for num, inp_name in self._input_names.items():
             if inp_name == name:
                 return num
-        
+
         # Fallback to default mapping
         default_map = {
-            "HDMI 1": 1, "HDMI 2": 2, "HDMI 3": 3, "HDMI 4": 4,
-            "HDMI 5": 5, "HDMI 6": 6, "HDMI 7": 7, "HDMI 8": 8,
-            "Analog 1": 9, "Analog 2": 10,
-            "Digital 1": 11, "Digital 2": 12,
-            "USB": 13, "Network": 14, "ARC": 15
+            "HDMI 1": 1,
+            "HDMI 2": 2,
+            "HDMI 3": 3,
+            "HDMI 4": 4,
+            "HDMI 5": 5,
+            "HDMI 6": 6,
+            "HDMI 7": 7,
+            "HDMI 8": 8,
+            "Analog 1": 9,
+            "Analog 2": 10,
+            "Digital 1": 11,
+            "Digital 2": 12,
+            "USB": 13,
+            "Network": 14,
+            "ARC": 15,
         }
         return default_map.get(name)
-    
+
     def get_zone_state(self, zone: int) -> dict[str, Any]:
         """Get current state for a zone."""
         return self._zone_states.get(zone, {})
