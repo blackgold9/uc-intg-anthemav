@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from ucapi import StatusCodes
-from ucapi.remote import Attributes, Commands, Features, Options, Remote
+from ucapi.remote import Commands, Features, Options, Remote
 
 from .config import AnthemDeviceConfig, ZoneConfig
 from .device import AnthemDevice
@@ -34,38 +34,47 @@ class AnthemRemote(Remote):
         "Dolby Digital": 12,
         "DTS": 13,
         "PCM Stereo": 14,
-        "Direct": 15
+        "Direct": 15,
     }
-    
-    def __init__(self, device_config: AnthemDeviceConfig, device: AnthemDevice, zone_config: ZoneConfig):
+
+    def __init__(
+        self,
+        device_config: AnthemDeviceConfig,
+        device: AnthemDevice,
+        zone_config: ZoneConfig,
+    ):
         """Initialize remote entity with UI pages."""
         self._device = device
         self._device_config = device_config
         self._zone_config = zone_config
-        
+
         # Create entity ID
         if zone_config.zone_number == 1:
             entity_id = f"remote.{device_config.identifier}"
             entity_name = f"{device_config.name} Audio Controls"
         else:
-            entity_id = f"remote.{device_config.identifier}.zone{zone_config.zone_number}"
-            entity_name = f"{device_config.name} Zone {zone_config.zone_number} Audio Controls"
-        
+            entity_id = (
+                f"remote.{device_config.identifier}.zone{zone_config.zone_number}"
+            )
+            entity_name = (
+                f"{device_config.name} Zone {zone_config.zone_number} Audio Controls"
+            )
+
         # Features - Only SEND_CMD (no power control)
         features = [Features.SEND_CMD]
-        
+
         # No STATE attribute needed for remote entities without on_off
         attributes = {}
-        
+
         # Initialize base class WITHOUT options
         super().__init__(
             entity_id,
             entity_name,
             features,
             attributes,
-            cmd_handler=self.handle_command
+            cmd_handler=self.handle_command,
         )
-        
+
         # Define ALL simple commands
         simple_commands = [
             # Listening Modes
@@ -96,9 +105,9 @@ class AnthemRemote(Remote):
             "DOLBY_DRC_REDUCED",
             "DOLBY_DRC_LATE_NIGHT",
             "DOLBY_CENTER_SPREAD_ON",
-            "DOLBY_CENTER_SPREAD_OFF"
+            "DOLBY_CENTER_SPREAD_OFF",
         ]
-        
+
         # Define UI with pages
         user_interface = {
             "pages": [
@@ -113,14 +122,14 @@ class AnthemRemote(Remote):
                             "text": "Dolby\nSurround",
                             "command": {"cmd_id": "DOLBY_SURROUND"},
                             "location": {"x": 0, "y": 0},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "text",
                             "text": "DTS\nNeural:X",
                             "command": {"cmd_id": "DTS_NEURAL_X"},
                             "location": {"x": 2, "y": 0},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         # Row 2: AnthemLogic
                         {
@@ -128,14 +137,14 @@ class AnthemRemote(Remote):
                             "text": "AnthemLogic\nCinema",
                             "command": {"cmd_id": "ANTHEMLOGIC_CINEMA"},
                             "location": {"x": 0, "y": 1},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "text",
                             "text": "AnthemLogic\nMusic",
                             "command": {"cmd_id": "ANTHEMLOGIC_MUSIC"},
                             "location": {"x": 2, "y": 1},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         # Row 3: Stereo Modes
                         {
@@ -143,14 +152,14 @@ class AnthemRemote(Remote):
                             "text": "Stereo",
                             "command": {"cmd_id": "STEREO"},
                             "location": {"x": 0, "y": 2},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "text",
                             "text": "Multi-Ch\nStereo",
                             "command": {"cmd_id": "MULTI_CHANNEL_STEREO"},
                             "location": {"x": 2, "y": 2},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         # Row 4: Direct + Mode Navigation
                         {
@@ -158,21 +167,21 @@ class AnthemRemote(Remote):
                             "text": "Direct",
                             "command": {"cmd_id": "DIRECT"},
                             "location": {"x": 0, "y": 3},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:up-arrow",
                             "command": {"cmd_id": "AUDIO_MODE_UP"},
-                            "location": {"x": 2, "y": 3}
+                            "location": {"x": 2, "y": 3},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:down-arrow",
                             "command": {"cmd_id": "AUDIO_MODE_DOWN"},
-                            "location": {"x": 3, "y": 3}
-                        }
-                    ]
+                            "location": {"x": 3, "y": 3},
+                        },
+                    ],
                 },
                 {
                     "page_id": "tone_control",
@@ -184,59 +193,59 @@ class AnthemRemote(Remote):
                             "type": "text",
                             "text": "Bass",
                             "location": {"x": 0, "y": 0},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:up-arrow",
                             "command": {"cmd_id": "BASS_UP"},
-                            "location": {"x": 2, "y": 0}
+                            "location": {"x": 2, "y": 0},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:down-arrow",
                             "command": {"cmd_id": "BASS_DOWN"},
-                            "location": {"x": 3, "y": 0}
+                            "location": {"x": 3, "y": 0},
                         },
                         # Treble Controls
                         {
                             "type": "text",
                             "text": "Treble",
                             "location": {"x": 0, "y": 1},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:up-arrow",
                             "command": {"cmd_id": "TREBLE_UP"},
-                            "location": {"x": 2, "y": 1}
+                            "location": {"x": 2, "y": 1},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:down-arrow",
                             "command": {"cmd_id": "TREBLE_DOWN"},
-                            "location": {"x": 3, "y": 1}
+                            "location": {"x": 3, "y": 1},
                         },
                         # Balance Controls
                         {
                             "type": "text",
                             "text": "Balance",
                             "location": {"x": 0, "y": 2},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:left-arrow",
                             "command": {"cmd_id": "BALANCE_LEFT"},
-                            "location": {"x": 2, "y": 2}
+                            "location": {"x": 2, "y": 2},
                         },
                         {
                             "type": "icon",
                             "icon": "uc:right-arrow",
                             "command": {"cmd_id": "BALANCE_RIGHT"},
-                            "location": {"x": 3, "y": 2}
-                        }
-                    ]
+                            "location": {"x": 3, "y": 2},
+                        },
+                    ],
                 },
                 {
                     "page_id": "dolby_settings",
@@ -249,21 +258,21 @@ class AnthemRemote(Remote):
                             "text": "DRC\nNormal",
                             "command": {"cmd_id": "DOLBY_DRC_NORMAL"},
                             "location": {"x": 0, "y": 0},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "text",
                             "text": "DRC\nReduced",
                             "command": {"cmd_id": "DOLBY_DRC_REDUCED"},
                             "location": {"x": 2, "y": 0},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "text",
                             "text": "DRC\nLate Night",
                             "command": {"cmd_id": "DOLBY_DRC_LATE_NIGHT"},
                             "location": {"x": 0, "y": 1},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         # Center Spread
                         {
@@ -271,59 +280,61 @@ class AnthemRemote(Remote):
                             "text": "Center\nSpread ON",
                             "command": {"cmd_id": "DOLBY_CENTER_SPREAD_ON"},
                             "location": {"x": 0, "y": 2},
-                            "size": {"width": 2, "height": 1}
+                            "size": {"width": 2, "height": 1},
                         },
                         {
                             "type": "text",
                             "text": "Center\nSpread OFF",
                             "command": {"cmd_id": "DOLBY_CENTER_SPREAD_OFF"},
                             "location": {"x": 2, "y": 2},
-                            "size": {"width": 2, "height": 1}
-                        }
-                    ]
-                }
+                            "size": {"width": 2, "height": 1},
+                        },
+                    ],
+                },
             ]
         }
-        
+
         # Set options as property AFTER initialization
         self.options = {
             Options.SIMPLE_COMMANDS: simple_commands,
-            "user_interface": user_interface
+            "user_interface": user_interface,
         }
-        
-        _LOG.info("[%s] Remote entity initialized with %d commands and 3 UI pages", 
-                  entity_id, len(simple_commands))
-        
+
+        _LOG.info(
+            "[%s] Remote entity initialized with %d commands and 3 UI pages",
+            entity_id,
+            len(simple_commands),
+        )
+
         # Register for device events
         device.events.on("UPDATE", self._on_device_update)
-    
-    async def _on_device_update(self, entity_id: str, update_data: dict[str, Any]) -> None:
+
+    async def _on_device_update(
+        self, entity_id: str, update_data: dict[str, Any]
+    ) -> None:
         """Handle device state updates."""
         pass
-    
+
     async def handle_command(
-        self,
-        entity: Remote,
-        cmd_id: str,
-        params: dict[str, Any] | None
+        self, entity: Remote, cmd_id: str, params: dict[str, Any] | None
     ) -> StatusCodes:
         _LOG.info("[%s] Command: %s %s", self.id, cmd_id, params or "")
-        
+
         try:
             zone = self._zone_config.zone_number
-            
+
             # CRITICAL: Check for send_cmd first
             if cmd_id != Commands.SEND_CMD:
                 _LOG.warning("[%s] Unsupported command type: %s", self.id, cmd_id)
                 return StatusCodes.NOT_FOUND
-            
+
             if not params or "command" not in params:
                 _LOG.error("[%s] Missing command parameter", self.id)
                 return StatusCodes.BAD_REQUEST
-            
+
             command = params["command"]
             _LOG.debug("[%s] Executing command: %s", self.id, command)
-            
+
             # Listening Modes
             if command == "DOLBY_SURROUND":
                 await self._device._send_command(f"Z{zone}ALM3")
@@ -346,7 +357,7 @@ class AnthemRemote(Remote):
             elif command == "DIRECT":
                 await self._device._send_command(f"Z{zone}ALM15")
                 return StatusCodes.OK
-            
+
             # Audio Mode Navigation
             elif command == "AUDIO_MODE_UP":
                 await self._device._send_command(f"Z{zone}AUP")
@@ -354,7 +365,7 @@ class AnthemRemote(Remote):
             elif command == "AUDIO_MODE_DOWN":
                 await self._device._send_command(f"Z{zone}ADN")
                 return StatusCodes.OK
-            
+
             # Tone Controls
             elif command == "BASS_UP":
                 await self._device._send_command(f"Z{zone}TUP0")
@@ -368,7 +379,7 @@ class AnthemRemote(Remote):
             elif command == "TREBLE_DOWN":
                 await self._device._send_command(f"Z{zone}TDN1")
                 return StatusCodes.OK
-            
+
             # Balance
             elif command == "BALANCE_LEFT":
                 await self._device._send_command(f"Z{zone}BLT")
@@ -376,7 +387,7 @@ class AnthemRemote(Remote):
             elif command == "BALANCE_RIGHT":
                 await self._device._send_command(f"Z{zone}BRT")
                 return StatusCodes.OK
-            
+
             # Dolby Settings
             elif command == "DOLBY_DRC_NORMAL":
                 await self._device._send_command(f"Z{zone}DYN0")
@@ -393,15 +404,15 @@ class AnthemRemote(Remote):
             elif command == "DOLBY_CENTER_SPREAD_OFF":
                 await self._device._send_command(f"Z{zone}DSCS0")
                 return StatusCodes.OK
-            
+
             else:
                 _LOG.warning("[%s] Unknown audio command: %s", self.id, command)
                 return StatusCodes.NOT_FOUND
-        
+
         except Exception as err:
             _LOG.error("[%s] Error executing command %s: %s", self.id, cmd_id, err)
             return StatusCodes.SERVER_ERROR
-    
+
     @property
     def zone_number(self) -> int:
         """Get zone number."""

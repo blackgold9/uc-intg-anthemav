@@ -3,7 +3,7 @@ name: "Build & Draft Release"
 "on":
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 env:
   INTG_NAME: anthemav
@@ -49,7 +49,7 @@ jobs:
                 --collect-all zeroconf \
                 --collect-all ucapi \
                 --collect-all ucapi_framework \
-                uc_intg_${INTG_NAME}/__main__.py"
+                uc_intg_${INTG_NAME}/__init__.py"
 
       - name: Prepare artifacts
         shell: bash
@@ -60,15 +60,15 @@ jobs:
           echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
           echo "=== Artifact structure ==="
           ls -laR artifacts/
-          
+
       - name: Create upload artifact archive
         shell: bash
-        run: | 
+        run: |
           tar czvf ${{ env.ARTIFACT_NAME }}.tar.gz -C ${GITHUB_WORKSPACE}/artifacts .
           echo "=== Archive contents ==="
           tar tzvf ${{ env.ARTIFACT_NAME }}.tar.gz
           ls -lah ${{ env.ARTIFACT_NAME }}.tar.gz
-          
+
       - uses: actions/upload-artifact@v4
         id: upload_artifact
         with:
@@ -76,7 +76,7 @@ jobs:
           path: ${{ env.ARTIFACT_NAME }}.tar.gz
           if-no-files-found: error
           retention-days: 3
-            
+
   docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-24.04
@@ -115,7 +115,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-            
+
   release:
     name: Create Release
     runs-on: ubuntu-24.04
