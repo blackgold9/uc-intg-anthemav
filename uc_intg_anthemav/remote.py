@@ -50,13 +50,13 @@ class AnthemRemote(Remote):
 
         if zone_config.zone_number == 1:
             entity_id = f"remote.{device_config.identifier}"
-            entity_name = f"{device_config.name} Audio Controls"
+            entity_name = f"{device_config.name} Advanced Audio"
         else:
             entity_id = (
                 f"remote.{device_config.identifier}.zone{zone_config.zone_number}"
             )
             entity_name = (
-                f"{device_config.name} Zone {zone_config.zone_number} Audio Controls"
+                f"{device_config.name} Zone {zone_config.zone_number} Advanced Audio"
             )
 
         features = [Features.SEND_CMD]
