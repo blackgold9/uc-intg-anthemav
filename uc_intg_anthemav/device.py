@@ -350,6 +350,55 @@ class AnthemDevice(PersistentConnectionDevice):
         """Select input source."""
         return await self._send_command(f"Z{zone}INP{input_num}")
 
+    async def set_arc(self, enabled: bool, input_num: int = 1) -> bool:
+        """Enable/disable Anthem Room Correction for input."""
+        return await self._send_command(f"IS{input_num}ARC{'1' if enabled else '0'}")
+
+    async def set_front_panel_brightness(self, brightness: int) -> bool:
+        """Set front panel brightness (0-100%)."""
+        brightness = max(0, min(100, brightness))
+        return await self._send_command(f"GCFPB{brightness}")
+
+    async def set_front_panel_display(self, mode: int) -> bool:
+        """Set front panel display mode (0=All, 1=Volume only)."""
+        mode = max(0, min(1, mode))
+        return await self._send_command(f"GCFPDI{mode}")
+
+    async def set_hdmi_standby_bypass(self, mode: int) -> bool:
+        """Set HDMI standby bypass (0=Off, 1=Last Used, 2-8=HDMI 1-7)."""
+        mode = max(0, min(8, mode))
+        return await self._send_command(f"GCSHDMIB{mode}")
+
+    async def set_cec_control(self, enabled: bool) -> bool:
+        """Enable/disable CEC control."""
+        return await self._send_command(f"GCCECC{'1' if enabled else '0'}")
+
+    async def set_zone2_max_volume(self, volume_db: int) -> bool:
+        """Set Zone 2 maximum volume (-40 to +10 dB)."""
+        volume_db = max(-40, min(10, volume_db))
+        return await self._send_command(f"GCZ2MMV{volume_db}")
+
+    async def set_zone2_power_on_volume(self, volume_db: int | None) -> bool:
+        """Set Zone 2 power-on volume (0=Last Used, or -90 to max volume)."""
+        if volume_db is None or volume_db == 0:
+            return await self._send_command("GCZ2POV0")
+        volume_db = max(-90, min(10, volume_db))
+        return await self._send_command(f"GCZ2POV{volume_db}")
+
+    async def set_zone2_power_on_input(self, input_num: int) -> bool:
+        """Set Zone 2 power-on input (0=Last Used, or input number)."""
+        return await self._send_command(f"GCZ2POI{input_num}")
+
+    async def speaker_level_up(self, channel: int, zone: int = 1) -> bool:
+        """Increase speaker level by 0.5dB."""
+        channel_hex = hex(channel)[2:].upper()
+        return await self._send_command(f"Z{zone}LUP{channel_hex}")
+
+    async def speaker_level_down(self, channel: int, zone: int = 1) -> bool:
+        """Decrease speaker level by 0.5dB."""
+        channel_hex = hex(channel)[2:].upper()
+        return await self._send_command(f"Z{zone}LDN{channel_hex}")
+
     async def set_osd_info(self, mode: int) -> bool:
         """Set on-screen display info mode (0=Off, 1=16:9, 2=2.4:1)."""
         mode = max(0, min(2, mode))
@@ -358,6 +407,29 @@ class AnthemDevice(PersistentConnectionDevice):
     async def query_status(self, zone: int = 1) -> bool:
         """Query all status for a zone."""
         commands = [f"Z{zone}POW?", f"Z{zone}VOL?", f"Z{zone}MUT?", f"Z{zone}INP?"]
+        for cmd in commands:
+            await self._send_command(cmd)
+            await asyncio.sleep(0.05)
+        return True
+
+    async def query_audio_info(self, zone: int = 1) -> bool:
+        """Query audio format information."""
+        commands = [
+            f"Z{zone}AIF?",
+            f"Z{zone}AIC?",
+            f"Z{zone}SRT?",
+            f"Z{zone}BDP?",
+            f"Z{zone}AIN?",
+            f"Z{zone}AIR?",
+        ]
+        for cmd in commands:
+            await self._send_command(cmd)
+            await asyncio.sleep(0.05)
+        return True
+
+    async def query_video_info(self, zone: int = 1) -> bool:
+        """Query video format information."""
+        commands = [f"Z{zone}VIR?", f"Z{zone}IRH?", f"Z{zone}IRV?"]
         for cmd in commands:
             await self._send_command(cmd)
             await asyncio.sleep(0.05)
