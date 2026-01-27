@@ -16,6 +16,7 @@ from ucapi.media_player import Attributes as MediaAttributes
 from ucapi.sensor import Attributes as SensorAttributes, States as SensorStates
 
 from .config import AnthemDeviceConfig
+from . import const
 
 _LOG = logging.getLogger(__name__)
 
@@ -66,16 +67,16 @@ class AnthemDevice(PersistentConnectionDevice):
             self._device_config.host, self._device_config.port
         )
 
-        await self._send_command("ECH0")
+        await self._send_command(const.CMD_ECHO_OFF)
         await asyncio.sleep(0.1)
-        await self._send_command("SIP1")
+        await self._send_command(const.CMD_STANDBY_IP_CONTROL_ON)
         await asyncio.sleep(0.1)
-        await self._send_command("ICN?")
+        await self._send_command(const.CMD_INPUT_COUNT_QUERY)
         await asyncio.sleep(0.2)
 
         for zone in self._device_config.zones:
             if zone.enabled:
-                await self._send_command(f"Z{zone.zone_number}POW?")
+                await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone.zone_number}{const.CMD_POWER_QUERY}")
                 await asyncio.sleep(0.05)
 
         _LOG.info("[%s] Connection established and initialized", self.log_id)
@@ -108,8 +109,8 @@ class AnthemDevice(PersistentConnectionDevice):
                 decoded = data.decode("ascii", errors="ignore")
                 buffer += decoded
 
-                while ";" in buffer:
-                    line, buffer = buffer.split(";", 1)
+                while const.CMD_TERMINATOR in buffer:
+                    line, buffer = buffer.split(const.CMD_TERMINATOR, 1)
                     line = line.strip()
                     if line:
                         await self._process_response(line)
@@ -129,7 +130,7 @@ class AnthemDevice(PersistentConnectionDevice):
             return False
 
         try:
-            cmd_bytes = f"{command};".encode("ascii")
+            cmd_bytes = f"{command}{const.CMD_TERMINATOR}".encode("ascii")
             self._writer.write(cmd_bytes)
             await self._writer.drain()
             _LOG.debug("[%s] Sent command: %s", self.log_id, command)
@@ -142,7 +143,7 @@ class AnthemDevice(PersistentConnectionDevice):
         """Process a response from the receiver."""
         _LOG.debug("[%s] RECEIVED: %s", self.log_id, response)
 
-        if response.startswith("!I") or response.startswith("!E"):
+        if response.startswith(const.RESP_ERROR_INVALID_COMMAND) or response.startswith(const.RESP_ERROR_EXECUTION_FAILED):
             _LOG.warning("[%s] Device error: %s", self.log_id, response)
             return
 
@@ -150,21 +151,28 @@ class AnthemDevice(PersistentConnectionDevice):
 
     def _update_state_from_response(self, response: str) -> None:
         """Update device state from response."""
-        if response.startswith("IDM"):
+        if response.startswith(const.RESP_MODEL):
             model = response[3:].strip()
             self._state = {"model": model}
             _LOG.info("[%s] Model: %s", self.log_id, model)
 
-        elif response.startswith("ICN"):
-            count_match = re.match(r"ICN(\d+)", response)
+        elif response.startswith(const.RESP_INPUT_COUNT):
+            count_match = re.match(rf"{const.RESP_INPUT_COUNT}(\d+)", response)
             if count_match:
                 self._input_count = int(count_match.group(1))
                 _LOG.info("[%s] Input count: %d", self.log_id, self._input_count)
                 asyncio.create_task(self._discover_input_names())
 
-        elif response.startswith("IS") and "IN" in response and len(response) > 5:
+        elif (
+            response.startswith(const.RESP_INPUT_SETTING)
+            and const.RESP_INPUT in response
+            and len(response) > 5
+        ):
             # Handle ISiINyyyy format for custom input names (i=01-30, yyyy=16 char name)
-            input_match = re.match(r"IS(\d{1,2})IN(.+)", response)
+            input_match = re.match(
+                rf"{const.RESP_INPUT_SETTING}(\d{{1,2}}){const.RESP_INPUT}(.+)",
+                response,
+            )
             if input_match:
                 input_num = int(input_match.group(1))
                 input_name = input_match.group(2).strip()
@@ -191,8 +199,8 @@ class AnthemDevice(PersistentConnectionDevice):
                                     {MediaAttributes.SOURCE_LIST.value: source_list},
                                 )
 
-        elif response.startswith("Z"):
-            zone_match = re.match(r"Z(\d+)", response)
+        elif response.startswith(const.RESP_ZONE_PREFIX):
+            zone_match = re.match(rf"{const.RESP_ZONE_PREFIX}(\d+)", response)
             if zone_match:
                 zone_num = int(zone_match.group(1))
 
@@ -202,8 +210,8 @@ class AnthemDevice(PersistentConnectionDevice):
                 state = self._zone_states[zone_num]
                 entity_id = self._get_entity_id_for_zone(zone_num)
 
-                if "POW" in response:
-                    power = "1" in response
+                if const.RESP_POWER in response:
+                    power = const.VAL_ON in response
                     state["power"] = power
                     new_state = "ON" if power else "OFF"
                     self._state = new_state
@@ -215,8 +223,8 @@ class AnthemDevice(PersistentConnectionDevice):
                             {MediaAttributes.STATE.value: new_state},
                         )
 
-                elif "VOL" in response:
-                    vol_match = re.search(r"VOL(-?\d+)", response)
+                elif const.RESP_VOLUME in response:
+                    vol_match = re.search(rf"{const.RESP_VOLUME}(-?\d+)", response)
                     if vol_match:
                         volume_db = int(vol_match.group(1))
 
@@ -269,8 +277,8 @@ class AnthemDevice(PersistentConnectionDevice):
                                 },
                             )
 
-                elif "MUT" in response:
-                    muted = "1" in response
+                elif const.RESP_MUTE in response:
+                    muted = const.VAL_ON in response
                     state["muted"] = muted
 
                     if entity_id:
@@ -285,8 +293,8 @@ class AnthemDevice(PersistentConnectionDevice):
                             },
                         )
 
-                elif "INP" in response:
-                    inp_match = re.search(r"INP(\d+)", response)
+                elif const.RESP_INPUT in response:
+                    inp_match = re.search(rf"{const.RESP_INPUT}(\d+)", response)
                     if inp_match:
                         input_num = int(inp_match.group(1))
                         state["input"] = input_num
@@ -308,9 +316,9 @@ class AnthemDevice(PersistentConnectionDevice):
                             )
 
                 # Sensor data parsing
-                elif "AIF" in response:
+                elif const.RESP_AUDIO_FORMAT in response:
                     # Audio Input Format (e.g., Z1AIFPCM, Z1AIFDolby Atmos)
-                    format_match = re.search(r"AIF(.+)", response)
+                    format_match = re.search(rf"{const.RESP_AUDIO_FORMAT}(.+)", response)
                     if format_match:
                         audio_format = format_match.group(1).strip()
                         state["audio_format"] = audio_format
@@ -320,9 +328,9 @@ class AnthemDevice(PersistentConnectionDevice):
                             SensorAttributes.VALUE.value: audio_format
                         })
 
-                elif "AIC" in response:
+                elif const.RESP_AUDIO_CHANNELS in response:
                     # Audio Input Channels (e.g., Z1AIC5.1, Z1AIC7.1.4)
-                    channels_match = re.search(r"AIC(.+)", response)
+                    channels_match = re.search(rf"{const.RESP_AUDIO_CHANNELS}(.+)", response)
                     if channels_match:
                         audio_channels = channels_match.group(1).strip()
                         state["audio_channels"] = audio_channels
@@ -332,9 +340,9 @@ class AnthemDevice(PersistentConnectionDevice):
                             SensorAttributes.VALUE.value: audio_channels
                         })
 
-                elif "VIR" in response:
+                elif const.RESP_VIDEO_RESOLUTION in response:
                     # Video Input Resolution (e.g., Z1VIR1080p, Z1VIR2160p60)
-                    resolution_match = re.search(r"VIR(.+)", response)
+                    resolution_match = re.search(rf"{const.RESP_VIDEO_RESOLUTION}(.+)", response)
                     if resolution_match:
                         video_resolution = resolution_match.group(1).strip()
                         state["video_resolution"] = video_resolution
@@ -344,9 +352,9 @@ class AnthemDevice(PersistentConnectionDevice):
                             SensorAttributes.VALUE.value: video_resolution
                         })
 
-                elif "ALM" in response and "?" not in response:
+                elif const.RESP_LISTENING_MODE in response and const.QUERY_SUFFIX not in response:
                     # Audio Listening Mode (e.g., Z1ALM3 = Dolby Surround)
-                    mode_match = re.search(r"ALM(\d+)", response)
+                    mode_match = re.search(rf"{const.RESP_LISTENING_MODE}(\d+)", response)
                     if mode_match:
                         mode_num = int(mode_match.group(1))
                         listening_mode = self._get_listening_mode_name(mode_num)
@@ -357,20 +365,24 @@ class AnthemDevice(PersistentConnectionDevice):
                             SensorAttributes.VALUE.value: listening_mode
                         })
 
-                elif "AIR" in response or "SRT" in response or "BDP" in response:
+                elif (
+                    const.RESP_AUDIO_INPUT_RATE in response
+                    or const.RESP_AUDIO_SAMPLE_RATE in response
+                    or const.RESP_AUDIO_BIT_DEPTH in response
+                ):
                     # Audio Input Rate/Sample Rate/Bit Depth
                     # (e.g., Z1AIR48kHz/24bit, Z1SRT48, Z1BDP24)
-                    rate_info = response[response.find("Z") + 2:].strip()
-                    if "AIR" in response:
-                        rate_match = re.search(r"AIR(.+)", response)
+                    rate_info = response[response.find(const.RESP_ZONE_PREFIX) + 2 :].strip()
+                    if const.RESP_AUDIO_INPUT_RATE in response:
+                        rate_match = re.search(rf"{const.RESP_AUDIO_INPUT_RATE}(.+)", response)
                         if rate_match:
                             state["sample_rate"] = rate_match.group(1).strip()
-                    elif "SRT" in response:
-                        rate_match = re.search(r"SRT(\d+)", response)
+                    elif const.RESP_AUDIO_SAMPLE_RATE in response:
+                        rate_match = re.search(rf"{const.RESP_AUDIO_SAMPLE_RATE}(\d+)", response)
                         if rate_match:
                             state["sample_rate"] = f"{rate_match.group(1)} kHz"
-                    elif "BDP" in response:
-                        depth_match = re.search(r"BDP(\d+)", response)
+                    elif const.RESP_AUDIO_BIT_DEPTH in response:
+                        depth_match = re.search(rf"{const.RESP_AUDIO_BIT_DEPTH}(\d+)", response)
                         if depth_match:
                             current_rate = state.get("sample_rate", "")
                             state["sample_rate"] = f"{current_rate} / {depth_match.group(1)}-bit".strip(" /")
@@ -391,132 +403,120 @@ class AnthemDevice(PersistentConnectionDevice):
 
     def _get_listening_mode_name(self, mode_num: int) -> str:
         """Convert listening mode number to friendly name."""
-        mode_names = {
-            0: "None",
-            1: "AnthemLogic Cinema",
-            2: "AnthemLogic Music",
-            3: "Dolby Surround",
-            4: "DTS Neural:X",
-            5: "Stereo",
-            6: "Multi-Channel Stereo",
-            7: "All-Channel Stereo",
-            8: "PLIIx Movie",
-            9: "PLIIx Music",
-            10: "Neo:6 Cinema",
-            11: "Neo:6 Music",
-            12: "Dolby Digital",
-            13: "DTS",
-            14: "PCM Stereo",
-            15: "Direct",
-        }
-        return mode_names.get(mode_num, f"Mode {mode_num}")
+        return const.LISTENING_MODES.get(mode_num, f"Mode {mode_num}")
 
     async def _discover_input_names(self) -> None:
         """Query custom/virtual input names from receiver (supports up to 30 inputs)."""
         for input_num in range(1, self._input_count + 1):
             # Use ISiIN? format to query custom input name (i=01-30)
-            await self._send_command(f"IS{input_num}IN?")
+            await self._send_command(f"{const.CMD_INPUT_SETTING_PREFIX}{input_num}{const.CMD_INPUT_NAME_QUERY_SUFFIX}")
             await asyncio.sleep(0.05)
 
     async def power_on(self, zone: int = 1) -> bool:
         """Turn on the specified zone."""
-        return await self._send_command(f"Z{zone}POW1")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_POWER}{const.VAL_ON}")
 
     async def power_off(self, zone: int = 1) -> bool:
         """Turn off the specified zone."""
-        return await self._send_command(f"Z{zone}POW0")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_POWER}{const.VAL_OFF}")
 
     async def set_volume(self, volume_db: int, zone: int = 1) -> bool:
         """Set volume in dB (-90 to 0)."""
         volume_db = max(-90, min(0, volume_db))
-        return await self._send_command(f"Z{zone}VOL{volume_db}")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME}{volume_db}")
 
     async def volume_up(self, zone: int = 1) -> bool:
         """Increase volume by 1dB."""
-        return await self._send_command(f"Z{zone}VUP")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME_UP}")
 
     async def volume_down(self, zone: int = 1) -> bool:
         """Decrease volume by 1dB."""
-        return await self._send_command(f"Z{zone}VDN")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME_DOWN}")
 
     async def set_mute(self, muted: bool, zone: int = 1) -> bool:
         """Set mute state."""
-        return await self._send_command(f"Z{zone}MUT{'1' if muted else '0'}")
+        return await self._send_command(
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_MUTE}{const.VAL_ON if muted else const.VAL_OFF}"
+        )
 
     async def mute_toggle(self, zone: int = 1) -> bool:
         """Toggle mute state using native Anthem command."""
-        return await self._send_command(f"Z{zone}MUTt")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_MUTE}{const.VAL_TOGGLE}")
 
     async def select_input(self, input_num: int, zone: int = 1) -> bool:
         """Select input source."""
-        return await self._send_command(f"Z{zone}INP{input_num}")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_INPUT}{input_num}")
 
     async def set_arc(self, enabled: bool, input_num: int = 1) -> bool:
         """Enable/disable Anthem Room Correction for input."""
-        return await self._send_command(f"IS{input_num}ARC{'1' if enabled else '0'}")
+        return await self._send_command(
+            f"{const.CMD_INPUT_SETTING_PREFIX}{input_num}{const.CMD_ARC_SETTING_SUFFIX}{const.VAL_ON if enabled else const.VAL_OFF}"
+        )
 
     async def set_front_panel_brightness(self, brightness: int) -> bool:
         """Set front panel brightness (0-100%)."""
         brightness = max(0, min(100, brightness))
-        return await self._send_command(f"GCFPB{brightness}")
+        return await self._send_command(f"{const.CMD_FRONT_PANEL_BRIGHTNESS}{brightness}")
 
     async def set_front_panel_display(self, mode: int) -> bool:
         """Set front panel display mode (0=All, 1=Volume only)."""
         mode = max(0, min(1, mode))
-        return await self._send_command(f"GCFPDI{mode}")
+        return await self._send_command(f"{const.CMD_FRONT_PANEL_DISPLAY_INFO}{mode}")
 
     async def set_hdmi_standby_bypass(self, mode: int) -> bool:
         """Set HDMI standby bypass (0=Off, 1=Last Used, 2-8=HDMI 1-7)."""
         mode = max(0, min(8, mode))
-        return await self._send_command(f"GCSHDMIB{mode}")
+        return await self._send_command(f"{const.CMD_HDMI_STANDBY_BYPASS}{mode}")
 
     async def set_cec_control(self, enabled: bool) -> bool:
         """Enable/disable CEC control."""
-        return await self._send_command(f"GCCECC{'1' if enabled else '0'}")
+        return await self._send_command(
+            f"{const.CMD_CEC_CONTROL}{const.VAL_ON if enabled else const.VAL_OFF}"
+        )
 
     async def set_zone2_max_volume(self, volume_db: int) -> bool:
         """Set Zone 2 maximum volume (-40 to +10 dB)."""
         volume_db = max(-40, min(10, volume_db))
-        return await self._send_command(f"GCZ2MMV{volume_db}")
+        return await self._send_command(f"{const.CMD_ZONE2_MAX_VOL}{volume_db}")
 
     async def set_zone2_power_on_volume(self, volume_db: int | None) -> bool:
         """Set Zone 2 power-on volume (0=Last Used, or -90 to max volume)."""
         if volume_db is None or volume_db == 0:
-            return await self._send_command("GCZ2POV0")
+            return await self._send_command(f"{const.CMD_ZONE2_POWER_ON_VOL}0")
         volume_db = max(-90, min(10, volume_db))
-        return await self._send_command(f"GCZ2POV{volume_db}")
+        return await self._send_command(f"{const.CMD_ZONE2_POWER_ON_VOL}{volume_db}")
 
     async def set_zone2_power_on_input(self, input_num: int) -> bool:
         """Set Zone 2 power-on input (0=Last Used, or input number)."""
-        return await self._send_command(f"GCZ2POI{input_num}")
+        return await self._send_command(f"{const.CMD_ZONE2_POWER_ON_INPUT}{input_num}")
 
     async def speaker_level_up(self, channel: int, zone: int = 1) -> bool:
         """Increase speaker level by 0.5dB."""
         channel_hex = hex(channel)[2:].upper()
-        return await self._send_command(f"Z{zone}LUP{channel_hex}")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_LEVEL_UP}{channel_hex}")
 
     async def speaker_level_down(self, channel: int, zone: int = 1) -> bool:
         """Decrease speaker level by 0.5dB."""
         channel_hex = hex(channel)[2:].upper()
-        return await self._send_command(f"Z{zone}LDN{channel_hex}")
+        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_LEVEL_DOWN}{channel_hex}")
 
     async def set_osd_info(self, mode: int) -> bool:
         """Set on-screen display info mode (0=Off, 1=16:9, 2=2.4:1)."""
         mode = max(0, min(2, mode))
-        return await self._send_command(f"GCOSID{mode}")
+        return await self._send_command(f"{const.CMD_OSD_INFO}{mode}")
 
     async def query_status(self, zone: int = 1) -> bool:
         """Query all status for a zone including sensor data."""
         commands = [
-            f"Z{zone}POW?",
-            f"Z{zone}VOL?",
-            f"Z{zone}MUT?",
-            f"Z{zone}INP?",
-            f"Z{zone}AIF?",  # Audio format
-            f"Z{zone}AIC?",  # Audio channels
-            f"Z{zone}VIR?",  # Video resolution
-            f"Z{zone}ALM?",  # Listening mode
-            f"Z{zone}AIR?",  # Sample rate info
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_POWER_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_MUTE_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_INPUT_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_FORMAT_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_CHANNELS_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_RESOLUTION_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_LISTENING_MODE_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_SAMPLE_RATE_QUERY}",
         ]
         for cmd in commands:
             await self._send_command(cmd)
@@ -526,12 +526,12 @@ class AnthemDevice(PersistentConnectionDevice):
     async def query_audio_info(self, zone: int = 1) -> bool:
         """Query audio format information."""
         commands = [
-            f"Z{zone}AIF?",
-            f"Z{zone}AIC?",
-            f"Z{zone}SRT?",
-            f"Z{zone}BDP?",
-            f"Z{zone}AIN?",
-            f"Z{zone}AIR?",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_FORMAT_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_CHANNELS_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_SAMPLE_RATE_KHZ_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_BIT_DEPTH_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_INPUT_NAME_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_SAMPLE_RATE_QUERY}",
         ]
         for cmd in commands:
             await self._send_command(cmd)
@@ -540,7 +540,11 @@ class AnthemDevice(PersistentConnectionDevice):
 
     async def query_video_info(self, zone: int = 1) -> bool:
         """Query video format information."""
-        commands = [f"Z{zone}VIR?", f"Z{zone}IRH?", f"Z{zone}IRV?"]
+        commands = [
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_RESOLUTION_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_HORIZ_RES_QUERY}",
+            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_VERT_RES_QUERY}",
+        ]
         for cmd in commands:
             await self._send_command(cmd)
             await asyncio.sleep(0.05)
@@ -567,23 +571,7 @@ class AnthemDevice(PersistentConnectionDevice):
             ]
 
         _LOG.debug("[%s] Using default input list (discovery incomplete)", self.log_id)
-        return [
-            "HDMI 1",
-            "HDMI 2",
-            "HDMI 3",
-            "HDMI 4",
-            "HDMI 5",
-            "HDMI 6",
-            "HDMI 7",
-            "HDMI 8",
-            "Analog 1",
-            "Analog 2",
-            "Digital 1",
-            "Digital 2",
-            "USB",
-            "Network",
-            "ARC",
-        ]
+        return const.DEFAULT_INPUT_LIST
 
     def get_input_number_by_name(self, name: str) -> int | None:
         """Get input number by name."""
@@ -591,24 +579,7 @@ class AnthemDevice(PersistentConnectionDevice):
             if inp_name == name:
                 return num
 
-        default_map = {
-            "HDMI 1": 1,
-            "HDMI 2": 2,
-            "HDMI 3": 3,
-            "HDMI 4": 4,
-            "HDMI 5": 5,
-            "HDMI 6": 6,
-            "HDMI 7": 7,
-            "HDMI 8": 8,
-            "Analog 1": 9,
-            "Analog 2": 10,
-            "Digital 1": 11,
-            "Digital 2": 12,
-            "USB": 13,
-            "Network": 14,
-            "ARC": 15,
-        }
-        return default_map.get(name)
+        return const.DEFAULT_INPUT_MAP.get(name)
 
     def get_zone_state(self, zone: int) -> dict[str, Any]:
         """Get current state for a zone."""
