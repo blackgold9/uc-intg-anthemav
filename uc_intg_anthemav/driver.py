@@ -110,7 +110,7 @@ class AnthemDriver(BaseIntegrationDriver[AnthemDevice, AnthemDeviceConfig]):
             _LOG.warning("[%s] Could not extract device_id", entity_id)
             return
 
-        device = self._configured_devices.get(device_id)
+        device = self._device_instances.get(device_id)
         if not device:
             _LOG.warning("[%s] Device %s not found", entity_id, device_id)
             return
