@@ -575,10 +575,22 @@ class AnthemDevice(PersistentConnectionDevice):
 
     def get_input_number_by_name(self, name: str) -> int | None:
         """Get input number by name."""
+        # First check runtime discovered inputs (most current)
         for num, inp_name in self._input_names.items():
             if inp_name == name:
                 return num
 
+        # Then check config discovered inputs (persistent from setup)
+        if self._device_config.discovered_inputs:
+            try:
+                # discovered_inputs is a list, find index and add 1 (inputs are 1-based)
+                index = self._device_config.discovered_inputs.index(name)
+                return index + 1
+            except ValueError:
+                # Name not found in discovered_inputs
+                pass
+
+        # Finally fall back to default input map
         return const.DEFAULT_INPUT_MAP.get(name)
 
     def get_zone_state(self, zone: int) -> dict[str, Any]:
