@@ -211,11 +211,6 @@ class AnthemDevice(PersistentConnectionDevice):
     def _(self, message: ZonePower) -> None:
         zone = self._zone_states[message.zone]
         zone.power = message.is_on
-        new_state = "ON" if message.is_on else "OFF"
-        self._state = new_state  # Should this be global? Or per zone?
-
-        # Note: Original code set self._state = new_state which seems to be global device state
-        # tracking power. It likely tracked the last zone reported.
 
         entity_id = self._get_entity_id_for_zone(message.zone)
         if entity_id:
