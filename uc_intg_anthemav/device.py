@@ -7,9 +7,10 @@ Anthem A/V Receiver device implementation using PersistentConnectionDevice.
 
 import asyncio
 import logging
-import re
 from typing import Any
 from time import time
+from functools import singledispatchmethod
+from collections import defaultdict
 
 from ucapi_framework import PersistentConnectionDevice, DeviceEvents
 from ucapi.media_player import Attributes as MediaAttributes
@@ -17,6 +18,15 @@ from ucapi.sensor import Attributes as SensorAttributes, States as SensorStates
 
 from .config import AnthemDeviceConfig
 from . import const
+from .models import (
+    ParsedMessage, SystemModel, InputCount, InputName,
+    ZoneMessage, ZonePower, ZoneVolume, ZoneMute, ZoneInput,
+    ZoneAudioFormat, ZoneAudioChannels, ZoneVideoResolution,
+    ZoneListeningMode, ZoneSampleRateInfo, ZoneSampleRate, ZoneBitDepth,
+    ZoneState
+)
+from .constants import MessagePrefixes
+from .parser import parse_message
 
 _LOG = logging.getLogger(__name__)
 
@@ -27,7 +37,9 @@ class AnthemDevice(PersistentConnectionDevice):
         self._device_config = device_config
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
-        self._zone_states: dict[int, dict[str, Any]] = {}
+
+        # State management
+        self._zone_states: dict[int, ZoneState] = defaultdict(ZoneState)
         self._input_names: dict[int, str] = {}
         self._input_count: int = 0
 
@@ -76,7 +88,7 @@ class AnthemDevice(PersistentConnectionDevice):
 
         for zone in self._device_config.zones:
             if zone.enabled:
-                await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone.zone_number}{const.CMD_POWER_QUERY}")
+                await self._send_command(self._get_zone_command(zone.zone_number, const.CMD_POWER_QUERY))
                 await asyncio.sleep(0.05)
 
         _LOG.info("[%s] Connection established and initialized", self.log_id)
@@ -124,7 +136,6 @@ class AnthemDevice(PersistentConnectionDevice):
         _LOG.debug("[%s] Message loop ended", self.log_id)
 
     async def _send_command(self, command: str) -> bool:
-
         if not self._writer:
             _LOG.warning("[%s] Cannot send command - not connected", self.log_id)
             return False
@@ -143,7 +154,7 @@ class AnthemDevice(PersistentConnectionDevice):
         """Process a response from the receiver."""
         _LOG.debug("[%s] RECEIVED: %s", self.log_id, response)
 
-        if response.startswith(const.RESP_ERROR_INVALID_COMMAND) or response.startswith(const.RESP_ERROR_EXECUTION_FAILED):
+        if response.startswith(MessagePrefixes.ERROR_INVALID_COMMAND) or response.startswith(MessagePrefixes.ERROR_EXECUTION_FAILED):
             _LOG.warning("[%s] Device error: %s", self.log_id, response)
             return
 
@@ -151,249 +162,242 @@ class AnthemDevice(PersistentConnectionDevice):
 
     def _update_state_from_response(self, response: str) -> None:
         """Update device state from response."""
-        if response.startswith(const.RESP_MODEL):
-            model = response[3:].strip()
-            self._state = {"model": model}
-            _LOG.info("[%s] Model: %s", self.log_id, model)
+        message = parse_message(response)
+        if message:
+            self._handle_message(message)
+        # Only log warning if it's a parseable message that we couldn't parse?
+        # Or just debug. parse_message handles ignored messages internally by returning None.
 
-        elif response.startswith(const.RESP_INPUT_COUNT):
-            count_match = re.match(rf"{const.RESP_INPUT_COUNT}(\d+)", response)
-            if count_match:
-                self._input_count = int(count_match.group(1))
-                _LOG.info("[%s] Input count: %d", self.log_id, self._input_count)
-                asyncio.create_task(self._discover_input_names())
+    @singledispatchmethod
+    def _handle_message(self, message: ParsedMessage) -> None:
+        """Handle parsed message."""
+        _LOG.debug("[%s] Unhandled message type: %s", self.log_id, type(message))
 
-        elif (
-            response.startswith(const.RESP_INPUT_SETTING)
-            and const.RESP_INPUT_NAME in response
-            and len(response) > 5
-        ):
-            # Handle ISiINyyyy format for custom input names (i=01-30, yyyy=16 char name)
-            input_match = re.match(
-                rf"{const.RESP_INPUT_SETTING}(\d{{1,2}}){const.RESP_INPUT_NAME}(.+)",
-                response,
+    @_handle_message.register
+    def _(self, message: SystemModel) -> None:
+        self._state = {"model": message.model}
+        _LOG.info("[%s] Model: %s", self.log_id, message.model)
+
+    @_handle_message.register
+    def _(self, message: InputCount) -> None:
+        self._input_count = message.count
+        _LOG.info("[%s] Input count: %d", self.log_id, self._input_count)
+        asyncio.create_task(self._discover_input_names())
+
+    @_handle_message.register
+    def _(self, message: InputName) -> None:
+        self._input_names[message.input_number] = message.name
+        _LOG.debug("[%s] Input %d: %s", self.log_id, message.input_number, message.name)
+
+        if len(self._input_names) == self._input_count:
+            _LOG.info(
+                "[%s] All %d inputs discovered, updating source lists",
+                self.log_id,
+                self._input_count,
             )
-            if input_match:
-                input_num = int(input_match.group(1))
-                input_name = input_match.group(2).strip()
-                self._input_names[input_num] = input_name
-                _LOG.debug("[%s] Input %d: %s", self.log_id, input_num, input_name)
+            source_list = self.get_input_list()
 
-                if len(self._input_names) == self._input_count:
-                    _LOG.info(
-                        "[%s] All %d inputs discovered, updating source lists",
-                        self.log_id,
-                        self._input_count,
-                    )
-                    source_list = self.get_input_list()
-
-                    for zone_config in self._device_config.zones:
-                        if zone_config.enabled:
-                            entity_id = self._get_entity_id_for_zone(
-                                zone_config.zone_number
-                            )
-                            if entity_id:
-                                self.events.emit(
-                                    DeviceEvents.UPDATE,
-                                    entity_id,
-                                    {MediaAttributes.SOURCE_LIST.value: source_list},
-                                )
-
-        elif response.startswith(const.RESP_ZONE_PREFIX):
-            zone_match = re.match(rf"{const.RESP_ZONE_PREFIX}(\d+)", response)
-            if zone_match:
-                zone_num = int(zone_match.group(1))
-
-                if zone_num not in self._zone_states:
-                    self._zone_states[zone_num] = {}
-
-                state = self._zone_states[zone_num]
-                entity_id = self._get_entity_id_for_zone(zone_num)
-
-                if const.RESP_POWER in response:
-                    power = const.VAL_ON in response
-                    state["power"] = power
-                    new_state = "ON" if power else "OFF"
-                    self._state = new_state
-
+            for zone_config in self._device_config.zones:
+                if zone_config.enabled:
+                    entity_id = self._get_entity_id_for_zone(zone_config.zone_number)
                     if entity_id:
                         self.events.emit(
                             DeviceEvents.UPDATE,
                             entity_id,
-                            {MediaAttributes.STATE.value: new_state},
+                            {MediaAttributes.SOURCE_LIST.value: source_list},
                         )
 
-                elif const.RESP_VOLUME in response:
-                    vol_match = re.search(rf"{const.RESP_VOLUME}(-?\d+)", response)
-                    if vol_match:
-                        volume_db = int(vol_match.group(1))
+    @_handle_message.register
+    def _(self, message: ZonePower) -> None:
+        zone = self._zone_states[message.zone]
+        zone.power = message.is_on
+        new_state = "ON" if message.is_on else "OFF"
+        self._state = new_state  # Should this be global? Or per zone?
 
-                        if volume_db < -90 or volume_db > 0:
-                            _LOG.warning(
-                                "[%s] Invalid volume dB value: %d (must be -90 to 0), ignoring",
-                                self.log_id,
-                                volume_db
-                            )
-                            return
+        # Note: Original code set self._state = new_state which seems to be global device state
+        # tracking power. It likely tracked the last zone reported.
 
-                        state["volume_db"] = volume_db
-                        volume_pct = int(((volume_db + 90) / 90) * 100)
+        entity_id = self._get_entity_id_for_zone(message.zone)
+        if entity_id:
+            self.events.emit(
+                DeviceEvents.UPDATE,
+                entity_id,
+                {MediaAttributes.STATE.value: new_state},
+            )
 
-                        volume_pct = max(0, min(100, volume_pct))
+    @_handle_message.register
+    def _(self, message: ZoneVolume) -> None:
+        if message.volume_db < -90 or message.volume_db > 0:
+            _LOG.warning(
+                "[%s] Invalid volume dB value: %d (must be -90 to 0), ignoring",
+                self.log_id,
+                message.volume_db
+            )
+            return
 
-                        current_time = time()
-                        if zone_num in self._last_volume_update:
-                            last_vol, last_time = self._last_volume_update[zone_num]
-                            time_diff_ms = (current_time - last_time) * 1000
+        zone = self._zone_states[message.zone]
+        zone.volume_db = message.volume_db
+        volume_pct = int(((message.volume_db + 90) / 90) * 100)
+        volume_pct = max(0, min(100, volume_pct))
 
-                            if last_vol == volume_pct and time_diff_ms < self._volume_debounce_ms:
-                                _LOG.debug(
-                                    "[%s] Zone %d: Ignoring duplicate volume %d%% (within %dms)",
-                                    self.log_id,
-                                    zone_num,
-                                    volume_pct,
-                                    self._volume_debounce_ms
-                                )
-                                return
+        current_time = time()
+        if message.zone in self._last_volume_update:
+            last_vol, last_time = self._last_volume_update[message.zone]
+            time_diff_ms = (current_time - last_time) * 1000
 
-                        self._last_volume_update[zone_num] = (volume_pct, current_time)
+            if last_vol == volume_pct and time_diff_ms < self._volume_debounce_ms:
+                _LOG.debug(
+                    "[%s] Zone %d: Ignoring duplicate volume %d%% (within %dms)",
+                    self.log_id,
+                    message.zone,
+                    volume_pct,
+                    self._volume_debounce_ms
+                )
+                return
 
-                        if entity_id:
-                            _LOG.debug(
-                                "[%s] Zone %d: Volume update %ddB → %d%%",
-                                self.log_id,
-                                zone_num,
-                                volume_db,
-                                volume_pct
-                            )
-                            self.events.emit(
-                                DeviceEvents.UPDATE,
-                                entity_id,
-                                {
-                                    MediaAttributes.VOLUME.value: volume_pct,
-                                    MediaAttributes.STATE.value: state.get("power", False)
-                                    and "ON"
-                                    or "OFF",
-                                },
-                            )
+        self._last_volume_update[message.zone] = (volume_pct, current_time)
 
-                elif const.RESP_MUTE in response:
-                    muted = const.VAL_ON in response
-                    state["muted"] = muted
+        entity_id = self._get_entity_id_for_zone(message.zone)
+        if entity_id:
+            _LOG.debug(
+                "[%s] Zone %d: Volume update %ddB → %d%%",
+                self.log_id,
+                message.zone,
+                message.volume_db,
+                volume_pct
+            )
+            self.events.emit(
+                DeviceEvents.UPDATE,
+                entity_id,
+                {
+                    MediaAttributes.VOLUME.value: volume_pct,
+                    MediaAttributes.STATE.value: zone.power and "ON" or "OFF",
+                },
+            )
 
-                    if entity_id:
-                        self.events.emit(
-                            DeviceEvents.UPDATE,
-                            entity_id,
-                            {
-                                MediaAttributes.MUTED.value: muted,
-                                MediaAttributes.STATE.value: state.get("power", False)
-                                and "ON"
-                                or "OFF",
-                            },
-                        )
+        # Also update the volume sensor
+        if self._is_sensor_zone(message.zone):
+            sensor_id = f"sensor.{self.identifier}_volume"
+            self.events.emit(DeviceEvents.UPDATE, sensor_id, {
+                SensorAttributes.STATE.value: SensorStates.ON.value,
+                SensorAttributes.VALUE.value: str(message.volume_db)
+            })
 
-                elif const.RESP_INPUT in response:
-                    inp_match = re.search(rf"{const.RESP_INPUT}(\d+)", response)
-                    if inp_match:
-                        input_num = int(inp_match.group(1))
-                        state["input"] = input_num
-                        input_name = self._input_names.get(
-                            input_num, f"Input {input_num}"
-                        )
-                        state["input_name"] = input_name
+    @_handle_message.register
+    def _(self, message: ZoneMute) -> None:
+        zone = self._zone_states[message.zone]
+        zone.muted = message.is_muted
 
-                        if entity_id:
-                            self.events.emit(
-                                DeviceEvents.UPDATE,
-                                entity_id,
-                                {
-                                    MediaAttributes.SOURCE.value: input_name,
-                                    MediaAttributes.STATE.value: state.get("power", False)
-                                    and "ON"
-                                    or "OFF",
-                                },
-                            )
+        entity_id = self._get_entity_id_for_zone(message.zone)
+        if entity_id:
+            self.events.emit(
+                DeviceEvents.UPDATE,
+                entity_id,
+                {
+                    MediaAttributes.MUTED.value: message.is_muted,
+                    MediaAttributes.STATE.value: zone.power and "ON" or "OFF",
+                },
+            )
 
-                # Sensor data parsing
-                elif const.RESP_AUDIO_FORMAT in response:
-                    # Audio Input Format (e.g., Z1AIFPCM, Z1AIFDolby Atmos)
-                    format_match = re.search(rf"{const.RESP_AUDIO_FORMAT}(.+)", response)
-                    if format_match:
-                        audio_format = format_match.group(1).strip()
-                        state["audio_format"] = audio_format
-                        sensor_id = f"sensor.{self.identifier}_audio_format"
-                        self.events.emit(DeviceEvents.UPDATE, sensor_id, {
-                            SensorAttributes.STATE.value: SensorStates.ON.value,
-                            SensorAttributes.VALUE.value: audio_format
-                        })
+    @_handle_message.register
+    def _(self, message: ZoneInput) -> None:
+        zone = self._zone_states[message.zone]
+        zone.input_number = message.input_number
+        zone.input_name = self._input_names.get(message.input_number, f"Input {message.input_number}")
 
-                elif const.RESP_AUDIO_CHANNELS in response:
-                    # Audio Input Channels (e.g., Z1AIC5.1, Z1AIC7.1.4)
-                    channels_match = re.search(rf"{const.RESP_AUDIO_CHANNELS}(.+)", response)
-                    if channels_match:
-                        audio_channels = channels_match.group(1).strip()
-                        state["audio_channels"] = audio_channels
-                        sensor_id = f"sensor.{self.identifier}_audio_channels"
-                        self.events.emit(DeviceEvents.UPDATE, sensor_id, {
-                            SensorAttributes.STATE.value: SensorStates.ON.value,
-                            SensorAttributes.VALUE.value: audio_channels
-                        })
+        entity_id = self._get_entity_id_for_zone(message.zone)
+        if entity_id:
+            self.events.emit(
+                DeviceEvents.UPDATE,
+                entity_id,
+                {
+                    MediaAttributes.SOURCE.value: zone.input_name,
+                    MediaAttributes.STATE.value: zone.power and "ON" or "OFF",
+                },
+            )
 
-                elif const.RESP_VIDEO_RESOLUTION in response:
-                    # Video Input Resolution (e.g., Z1VIR1080p, Z1VIR2160p60)
-                    resolution_match = re.search(rf"{const.RESP_VIDEO_RESOLUTION}(.+)", response)
-                    if resolution_match:
-                        video_resolution = resolution_match.group(1).strip()
-                        state["video_resolution"] = video_resolution
-                        sensor_id = f"sensor.{self.identifier}_video_resolution"
-                        self.events.emit(DeviceEvents.UPDATE, sensor_id, {
-                            SensorAttributes.STATE.value: SensorStates.ON.value,
-                            SensorAttributes.VALUE.value: video_resolution
-                        })
+    @_handle_message.register
+    def _(self, message: ZoneAudioFormat) -> None:
+        zone = self._zone_states[message.zone]
+        zone.audio_format = message.format
+        if self._is_sensor_zone(message.zone):
+            sensor_id = f"sensor.{self.identifier}_audio_format"
+            self.events.emit(DeviceEvents.UPDATE, sensor_id, {
+                SensorAttributes.STATE.value: SensorStates.ON.value,
+                SensorAttributes.VALUE.value: message.format
+            })
 
-                elif const.RESP_LISTENING_MODE in response and const.QUERY_SUFFIX not in response:
-                    # Audio Listening Mode (e.g., Z1ALM3 = Dolby Surround)
-                    mode_match = re.search(rf"{const.RESP_LISTENING_MODE}(\d+)", response)
-                    if mode_match:
-                        mode_num = int(mode_match.group(1))
-                        listening_mode = self._get_listening_mode_name(mode_num)
-                        state["listening_mode"] = listening_mode
-                        sensor_id = f"sensor.{self.identifier}_listening_mode"
-                        self.events.emit(DeviceEvents.UPDATE, sensor_id, {
-                            SensorAttributes.STATE.value: SensorStates.ON.value,
-                            SensorAttributes.VALUE.value: listening_mode
-                        })
+    @_handle_message.register
+    def _(self, message: ZoneAudioChannels) -> None:
+        zone = self._zone_states[message.zone]
+        zone.audio_channels = message.channels
+        if self._is_sensor_zone(message.zone):
+            sensor_id = f"sensor.{self.identifier}_audio_channels"
+            self.events.emit(DeviceEvents.UPDATE, sensor_id, {
+                SensorAttributes.STATE.value: SensorStates.ON.value,
+                SensorAttributes.VALUE.value: message.channels
+            })
 
-                elif (
-                    const.RESP_AUDIO_INPUT_RATE in response
-                    or const.RESP_AUDIO_SAMPLE_RATE in response
-                    or const.RESP_AUDIO_BIT_DEPTH in response
-                ):
-                    # Audio Input Rate/Sample Rate/Bit Depth
-                    # (e.g., Z1AIR48kHz/24bit, Z1SRT48, Z1BDP24)
-                    rate_info = response[response.find(const.RESP_ZONE_PREFIX) + 2 :].strip()
-                    if const.RESP_AUDIO_INPUT_RATE in response:
-                        rate_match = re.search(rf"{const.RESP_AUDIO_INPUT_RATE}(.+)", response)
-                        if rate_match:
-                            state["sample_rate"] = rate_match.group(1).strip()
-                    elif const.RESP_AUDIO_SAMPLE_RATE in response:
-                        rate_match = re.search(rf"{const.RESP_AUDIO_SAMPLE_RATE}(\d+)", response)
-                        if rate_match:
-                            state["sample_rate"] = f"{rate_match.group(1)} kHz"
-                    elif const.RESP_AUDIO_BIT_DEPTH in response:
-                        depth_match = re.search(rf"{const.RESP_AUDIO_BIT_DEPTH}(\d+)", response)
-                        if depth_match:
-                            current_rate = state.get("sample_rate", "")
-                            state["sample_rate"] = f"{current_rate} / {depth_match.group(1)}-bit".strip(" /")
+    @_handle_message.register
+    def _(self, message: ZoneVideoResolution) -> None:
+        zone = self._zone_states[message.zone]
+        zone.video_resolution = message.resolution
+        if self._is_sensor_zone(message.zone):
+            sensor_id = f"sensor.{self.identifier}_video_resolution"
+            self.events.emit(DeviceEvents.UPDATE, sensor_id, {
+                SensorAttributes.STATE.value: SensorStates.ON.value,
+                SensorAttributes.VALUE.value: message.resolution
+            })
 
-                    sensor_id = f"sensor.{self.identifier}_sample_rate"
-                    from ucapi.sensor import Attributes as SensorAttributes, States as SensorStates
-                    sample_rate_value = state.get("sample_rate", "Unknown")
-                    self.events.emit(DeviceEvents.UPDATE, sensor_id, {
-                        SensorAttributes.STATE.value: SensorStates.ON.value,
-                        SensorAttributes.VALUE.value: sample_rate_value
-                    })
+    @_handle_message.register
+    def _(self, message: ZoneListeningMode) -> None:
+        zone = self._zone_states[message.zone]
+        zone.listening_mode = message.mode_name
+        if self._is_sensor_zone(message.zone):
+            sensor_id = f"sensor.{self.identifier}_listening_mode"
+            self.events.emit(DeviceEvents.UPDATE, sensor_id, {
+                SensorAttributes.STATE.value: SensorStates.ON.value,
+                SensorAttributes.VALUE.value: message.mode_name
+            })
+
+    @_handle_message.register
+    def _(self, message: ZoneSampleRateInfo) -> None:
+        zone = self._zone_states[message.zone]
+        zone.sample_rate = message.info
+        self._emit_sample_rate_update(message.zone, message.info)
+
+    @_handle_message.register
+    def _(self, message: ZoneSampleRate) -> None:
+        zone = self._zone_states[message.zone]
+        zone.sample_rate = f"{message.rate_khz} kHz"
+        self._emit_sample_rate_update(message.zone, zone.sample_rate)
+
+    @_handle_message.register
+    def _(self, message: ZoneBitDepth) -> None:
+        zone = self._zone_states[message.zone]
+        current_rate = zone.sample_rate
+        if current_rate == "Unknown":
+            current_rate = ""
+
+        # Append bit depth if not present or replace?
+        # Logic in original: state["sample_rate"] = f"{current_rate} / {depth}-bit".strip(" /")
+        zone.sample_rate = f"{current_rate} / {message.depth}-bit".strip(" /")
+        self._emit_sample_rate_update(message.zone, zone.sample_rate)
+
+    def _emit_sample_rate_update(self, zone_num: int, value: str) -> None:
+        if self._is_sensor_zone(zone_num):
+            sensor_id = f"sensor.{self.identifier}_sample_rate"
+            self.events.emit(DeviceEvents.UPDATE, sensor_id, {
+                SensorAttributes.STATE.value: SensorStates.ON.value,
+                SensorAttributes.VALUE.value: value
+            })
+
+    def _is_sensor_zone(self, zone_num: int) -> bool:
+        """
+        Check if the given zone is a zone that should emit sensor updates.
+        Currently, sensors are only created for Zone 1.
+        """
+        return zone_num == 1
 
     def _get_entity_id_for_zone(self, zone_num: int) -> str | None:
         """Get entity ID for a zone number."""
@@ -401,9 +405,9 @@ class AnthemDevice(PersistentConnectionDevice):
             return f"media_player.{self.identifier}"
         return f"media_player.{self.identifier}.zone{zone_num}"
 
-    def _get_listening_mode_name(self, mode_num: int) -> str:
-        """Convert listening mode number to friendly name."""
-        return const.LISTENING_MODES.get(mode_num, f"Mode {mode_num}")
+    def _get_zone_command(self, zone: int, command: str, value: Any = "") -> str:
+        """Construct a zone-specific command string."""
+        return f"{const.CMD_ZONE_PREFIX}{zone}{command}{value}"
 
     async def _discover_input_names(self) -> None:
         """Query custom/virtual input names from receiver (supports up to 30 inputs)."""
@@ -414,38 +418,38 @@ class AnthemDevice(PersistentConnectionDevice):
 
     async def power_on(self, zone: int = 1) -> bool:
         """Turn on the specified zone."""
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_POWER}{const.VAL_ON}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_POWER, const.VAL_ON))
 
     async def power_off(self, zone: int = 1) -> bool:
         """Turn off the specified zone."""
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_POWER}{const.VAL_OFF}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_POWER, const.VAL_OFF))
 
     async def set_volume(self, volume_db: int, zone: int = 1) -> bool:
         """Set volume in dB (-90 to 0)."""
         volume_db = max(-90, min(0, volume_db))
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME}{volume_db}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_VOLUME, volume_db))
 
     async def volume_up(self, zone: int = 1) -> bool:
         """Increase volume by 1dB."""
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME_UP}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_VOLUME_UP))
 
     async def volume_down(self, zone: int = 1) -> bool:
         """Decrease volume by 1dB."""
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME_DOWN}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_VOLUME_DOWN))
 
     async def set_mute(self, muted: bool, zone: int = 1) -> bool:
         """Set mute state."""
         return await self._send_command(
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_MUTE}{const.VAL_ON if muted else const.VAL_OFF}"
+            self._get_zone_command(zone, const.CMD_MUTE, const.VAL_ON if muted else const.VAL_OFF)
         )
 
     async def mute_toggle(self, zone: int = 1) -> bool:
         """Toggle mute state using native Anthem command."""
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_MUTE}{const.VAL_TOGGLE}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_MUTE, const.VAL_TOGGLE))
 
     async def select_input(self, input_num: int, zone: int = 1) -> bool:
         """Select input source."""
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_INPUT}{input_num}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_INPUT, input_num))
 
     async def set_arc(self, enabled: bool, input_num: int = 1) -> bool:
         """Enable/disable Anthem Room Correction for input."""
@@ -493,12 +497,12 @@ class AnthemDevice(PersistentConnectionDevice):
     async def speaker_level_up(self, channel: int, zone: int = 1) -> bool:
         """Increase speaker level by 0.5dB."""
         channel_hex = hex(channel)[2:].upper()
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_LEVEL_UP}{channel_hex}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_LEVEL_UP, channel_hex))
 
     async def speaker_level_down(self, channel: int, zone: int = 1) -> bool:
         """Decrease speaker level by 0.5dB."""
         channel_hex = hex(channel)[2:].upper()
-        return await self._send_command(f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_LEVEL_DOWN}{channel_hex}")
+        return await self._send_command(self._get_zone_command(zone, const.CMD_LEVEL_DOWN, channel_hex))
 
     async def set_osd_info(self, mode: int) -> bool:
         """Set on-screen display info mode (0=Off, 1=16:9, 2=2.4:1)."""
@@ -507,17 +511,18 @@ class AnthemDevice(PersistentConnectionDevice):
 
     async def query_status(self, zone: int = 1) -> bool:
         """Query all status for a zone including sensor data."""
-        commands = [
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_POWER_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VOLUME_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_MUTE_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_INPUT_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_FORMAT_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_CHANNELS_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_RESOLUTION_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_LISTENING_MODE_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_SAMPLE_RATE_QUERY}",
+        queries = [
+            const.CMD_POWER_QUERY,
+            const.CMD_VOLUME_QUERY,
+            const.CMD_MUTE_QUERY,
+            const.CMD_INPUT_QUERY,
+            const.CMD_AUDIO_FORMAT_QUERY,
+            const.CMD_AUDIO_CHANNELS_QUERY,
+            const.CMD_VIDEO_RESOLUTION_QUERY,
+            const.CMD_LISTENING_MODE_QUERY,
+            const.CMD_AUDIO_SAMPLE_RATE_QUERY,
         ]
+        commands = [self._get_zone_command(zone, q) for q in queries]
         for cmd in commands:
             await self._send_command(cmd)
             await asyncio.sleep(0.05)
@@ -525,14 +530,15 @@ class AnthemDevice(PersistentConnectionDevice):
 
     async def query_audio_info(self, zone: int = 1) -> bool:
         """Query audio format information."""
-        commands = [
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_FORMAT_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_CHANNELS_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_SAMPLE_RATE_KHZ_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_BIT_DEPTH_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_INPUT_NAME_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_AUDIO_SAMPLE_RATE_QUERY}",
+        queries = [
+            const.CMD_AUDIO_FORMAT_QUERY,
+            const.CMD_AUDIO_CHANNELS_QUERY,
+            const.CMD_AUDIO_SAMPLE_RATE_KHZ_QUERY,
+            const.CMD_AUDIO_BIT_DEPTH_QUERY,
+            const.CMD_AUDIO_INPUT_NAME_QUERY,
+            const.CMD_AUDIO_SAMPLE_RATE_QUERY,
         ]
+        commands = [self._get_zone_command(zone, q) for q in queries]
         for cmd in commands:
             await self._send_command(cmd)
             await asyncio.sleep(0.05)
@@ -540,11 +546,12 @@ class AnthemDevice(PersistentConnectionDevice):
 
     async def query_video_info(self, zone: int = 1) -> bool:
         """Query video format information."""
-        commands = [
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_RESOLUTION_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_HORIZ_RES_QUERY}",
-            f"{const.CMD_ZONE_PREFIX}{zone}{const.CMD_VIDEO_VERT_RES_QUERY}",
+        queries = [
+            const.CMD_VIDEO_RESOLUTION_QUERY,
+            const.CMD_VIDEO_HORIZ_RES_QUERY,
+            const.CMD_VIDEO_VERT_RES_QUERY,
         ]
+        commands = [self._get_zone_command(zone, q) for q in queries]
         for cmd in commands:
             await self._send_command(cmd)
             await asyncio.sleep(0.05)
@@ -593,6 +600,6 @@ class AnthemDevice(PersistentConnectionDevice):
         # Finally fall back to default input map
         return const.DEFAULT_INPUT_MAP.get(name)
 
-    def get_zone_state(self, zone: int) -> dict[str, Any]:
+    def get_zone_state(self, zone: int) -> ZoneState:
         """Get current state for a zone."""
-        return self._zone_states.get(zone, {})
+        return self._zone_states[zone]
